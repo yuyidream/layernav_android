@@ -280,6 +280,36 @@ class TestRestore:
         assert ok is True
 
 
+class TestBackRecover:
+    def test_back_recover_succeeds_after_cold_start(self):
+        m = _TestModel()
+        adb = MockAdb()
+
+        def _cold_start(adb, target, scale):
+            m._detect_returns = ["L1", "L1", "L1"]
+
+        m._cold_start = _cold_start
+
+        m._detect_returns = [
+            "L1",  # advance detect → at target → _call_on_layer
+            "L1",  # final detect
+        ]
+        ok = m.back_recover(adb, "L1", 1.0)
+        assert ok is True
+        assert adb._events == [KEYCODE_HOME]
+
+    def test_back_recover_fails_when_advance_fails(self):
+        m = _TestModel()
+        adb = MockAdb()
+
+        m._detect_returns = [
+            "L0",  # advance detect → not L1 → enter_next → timeout
+        ]
+        ok = m.back_recover(adb, "L1", 1.0)
+        assert ok is False
+        assert adb._events == [KEYCODE_HOME]
+
+
 class TestListener:
     def test_add_listener_and_notify(self):
         m = _TestModel()
