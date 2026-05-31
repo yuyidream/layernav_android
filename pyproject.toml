@@ -33,6 +33,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+dev = ["pytest>=8.0"]
 wechat = ["opencv-python>=4.8", "numpy>=1.24"]
 
 [project.urls]
