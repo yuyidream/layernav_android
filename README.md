@@ -8,6 +8,7 @@
 [![PyPI](https://badge.fury.io/py/layernav_android.svg)](https://badge.fury.io/py/layernav_android)
 [![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![CI](https://github.com/yuyidream/layernav_android/actions/workflows/ci.yml/badge.svg)](https://github.com/yuyidream/layernav_android/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/yuyidream/layernav_android/branch/main/graph/badge.svg)](https://codecov.io/gh/yuyidream/layernav_android)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ---
