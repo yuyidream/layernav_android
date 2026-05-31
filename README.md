@@ -1,4 +1,4 @@
-# LayerNavigator_Android
+# LayerNav_Android
 
 > A stable page layer navigation framework for Android ADB automation.
 > 基于 ADB 的安卓页面层级导航框架，主打**强校验、自动容错、故障恢复**，适用于 APP 数据采集、移动端 RPA、UI 自动化测试场景。
