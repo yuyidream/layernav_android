@@ -5,6 +5,7 @@
 >
 > **Python 3.12+** · 零外部依赖 · MIT License
 
+[![PyPI](https://badge.fury.io/py/layernav_android.svg)](https://badge.fury.io/py/layernav_android)
 [![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![CI](https://github.com/yuyidream/layernav_android/actions/workflows/ci.yml/badge.svg)](https://github.com/yuyidream/layernav_android/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -89,14 +90,31 @@ Ln     最深业务层级
 
 ### 1. 安装
 
+**方式一：pip 安装（推荐）**
+
 ```bash
 pip install layernav_android
 ```
 
-零外部依赖。如使用 WeChat contrib 需额外安装 `opencv-python` 和 `numpy`：
+如需使用 WeChat contrib 模块，需额外安装 `opencv-python` 和 `numpy`：
 
 ```bash
 pip install layernav_android[wechat]
+```
+
+**方式二：从源码安装**
+
+```bash
+git clone https://github.com/yuyidream/layernav_android.git
+cd layernav_android
+pip install -e .
+```
+
+如需运行测试：
+
+```bash
+pip install -e ".[dev]"
+pytest tests/ -v --tb=short
 ```
 
 ### 2. 基础使用
