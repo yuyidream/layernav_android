@@ -14,6 +14,7 @@ import time
 
 from layernav_android._protocol import AdbProtocol
 from layernav_android.base import KEYCODE_BACK, KEYCODE_HOME, BaseLayerModel, LayerDef
+from layernav_android.cold_start import cold_start_app_from_launcher
 
 LOG = logging.getLogger("layernav.xhs")
 
@@ -47,8 +48,20 @@ class XhsLayerModel(BaseLayerModel):
     def _cold_start(self, adb: AdbProtocol, target_layer: str, scale_w: float) -> None:
         adb.key_event(KEYCODE_HOME)
         time.sleep(0.8)
-        adb._run(["shell", "am", "start", "-n", "com.xingin.xhs/.activity.SplashActivity"])
-        time.sleep(3.0)
+
+        png = adb.screencap()
+        import numpy as np
+        arr = np.frombuffer(png, dtype=np.uint8)
+        arr = __import__("cv2").imdecode(arr, __import__("cv2").IMREAD_COLOR)
+        h, w = arr.shape[:2]
+
+        cold_start_app_from_launcher(
+            adb, "com.xingin.xhs",
+            app_name="xhs", M=4, N=1,
+            force_stop_before=True,
+            deadline_s=20.0,
+        )
+
         deadline = time.monotonic() + 20.0
         while time.monotonic() < deadline:
             if self.detect(adb, scale_w) == target_layer:

@@ -328,3 +328,102 @@ model.add_listener(MetricsListener())
 ```
 
 > 注：`back_one` 连续 3 次未到达目标层时，自动触发 `back_recover` 恢复链。`advance` / `restore` / `back` 是上述原子操作的组合。
+
+---
+
+## §9. 通用冷启动 —— `cold_start_app_from_launcher`
+
+### §9.1 设计动机
+
+原 `BaseLayerModel._cold_start` 各子类自行实现（`am start -n` 或 `monkey`），缺乏统一的 Dock 图标兜底、session tab 点击、force-stop 控制等能力。抽取为独立通版函数，供所有 APP 模型和外部调用方使用。
+
+### §9.2 函数签名
+
+```python
+from layernav_android.cold_start import cold_start_app_from_launcher, dock_app_icon_coords
+
+def cold_start_app_from_launcher(
+    adb: AdbProtocol,
+    package: str,
+    *,
+    app_name: str = "wechat",
+    M: int = 4,
+    N: int | None = None,
+    session_tab_x: int | None = None,
+    session_tab_y: int | None = None,
+    force_stop_before: bool = True,
+    deadline_s: float = 25.0,
+) -> bool:
+```
+
+| 参数 | 说明 | 默认 |
+|------|------|------|
+| `adb` | ADB 客户端（`AdbProtocol`，使用普通 `tap`，非防风控触控） | — |
+| `package` | Android 包名 | `"com.tencent.mm"` |
+| `app_name` | APP 名称，驱动默认 M/N | `"wechat"` |
+| `M` | Dock 槽位总数 | `4` |
+| `N` | APP 图标所在槽位（1‑indexed） | `wechat→3`, `xhs→1` |
+| `session_tab_x`, `session_tab_y` | 启动后需点击的 APP 内底栏 Tab 坐标（如微信「微信」Tab），不传则跳过 | `None` |
+| `force_stop_before` | 冷启动前是否 `am force-stop` | `True` |
+| `deadline_s` | 总超时 | `25.0` |
+
+屏幕尺寸始终通过 `adb shell wm size` 自动获取，调用方无需传入。
+
+### §9.3 冷启动路径
+
+```
+1. [可选] am force-stop <package>
+2. monkey -p <package> -c LAUNCHER 1          ← 主路径
+3. [可选] tap session_tab                       ← 进入APP后点击底栏Tab
+4. ↓ 如果 foreground != package:
+5. am start -a MAIN -c LAUNCHER <package>     ← 备选（定制 ROM 兼容）
+6. [可选] tap session_tab
+7. ↓ 如果仍然失败:
+8. dock_app_icon_coords(app_name, M, N) → tap  ← Dock 图标兜底（0.5s 预等 + 最多重试 2 次）
+9. [可选] tap session_tab
+```
+
+### §9.4 Dock 坐标公式
+
+```python
+def dock_app_icon_coords(
+    screen_w, screen_h, scale_w, *, app_name="wechat", M=4, N=None,
+) -> tuple[int, int]:
+    """Dock M 等分，APP 在第 N 格（1‑indexed），返回该槽位近似中心。"""
+    if N is None:
+        N = {"wechat": 3, "xhs": 1}.get(app_name, 1)
+    dx = int(round(screen_w * (N - 0.5) / M))
+    dy = screen_h - max(48, int(round(52 * scale_w)))
+    return dx, dy
+```
+
+### §9.5 使用示例
+
+```python
+# 微信 — 最简调用（尺寸自动获取，无 session tab）
+cold_start_app_from_launcher(
+    adb, "com.tencent.mm",
+    app_name="wechat", M=4, N=3,
+)
+
+# 微信 — 完整调用（含 session tab 定位到「微信」主列表）
+cold_start_app_from_launcher(
+    adb, "com.tencent.mm",
+    app_name="wechat", M=4, N=3,
+    session_tab_x=108, session_tab_y=2192,
+)
+
+# 小红书
+cold_start_app_from_launcher(
+    adb, "com.xingin.xhs",
+    app_name="xhs", M=4, N=1,
+)
+```
+
+### §9.6 设计说明
+
+- **使用普通 ADB tap**（非防风控触控）：冷启动是系统级操作（桌面 Dock 图标点击），不涉及 APP 内反爬检测，使用 `AdbProtocol.tap()` 即可，方便所有系统集成。
+- **屏幕尺寸自动获取**：`screen_w` / `screen_h` / `scale_w` 不再作为参数，函数内部通过 `adb shell wm size` 自动获取。调用方只需传 `app_name` / `M` / `N` 三个核心参数即可计算出 Dock 图标坐标。
+- **三条冷启动路径**：monkey（主路径）→ am start Intent（定制 ROM 备选）→ Dock 图标点击（兜底，含 0.5s 预等待 + 最多 2 次重试），覆盖大部分设备和 ROM。
+- `force_stop` 通过 `adb._run(["shell", "am", "force-stop", package])` 实现，无需额外接口。
+- 返回值 `bool` 表示 `foreground_package() == package`，调用方需自行判断是否到达目标层级。

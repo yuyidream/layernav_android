@@ -219,7 +219,38 @@ model.add_listener(MetricsListener())
 
 ---
 
-## 五、适用场景
+## 五、通用冷启动工具
+
+`cold_start_app_from_launcher` 提供统一的 APP 冷启动能力，支持 monkey 主路径 + Dock 图标兜底 + session tab 点击：
+
+```python
+from layernav_android.cold_start import cold_start_app_from_launcher
+
+# 微信 — 最简调用（尺寸自动获取）
+ok = cold_start_app_from_launcher(
+    adb, "com.tencent.mm",
+    app_name="wechat", M=4, N=3,
+)
+
+# 微信 — 含 session tab
+ok = cold_start_app_from_launcher(
+    adb, "com.tencent.mm",
+    app_name="wechat", M=4, N=3,
+    session_tab_x=108, session_tab_y=2192,
+)
+
+# 小红书
+ok = cold_start_app_from_launcher(
+    adb, "com.xingin.xhs",
+    app_name="xhs", M=4, N=1,
+)
+```
+
+**关键设计**：使用普通 ADB tap（非防风控触控），因为是系统级操作（桌面 Dock 图标点击），不涉及 APP 内反爬检测，方便所有系统集成。
+
+---
+
+## 六、适用场景
 
 - **APP 合规数据采集** — 内容抓取、列表遍历、批量浏览
 - **移动端 RPA 自动化** — 账号矩阵、批量操作、运营工具
@@ -228,7 +259,7 @@ model.add_listener(MetricsListener())
 
 ---
 
-## 六、优势对比
+## 七、优势对比
 
 | 能力 | 本框架 | Appium / uiautomator2 / Airtest |
 |------|--------|---------------------------------|
@@ -241,7 +272,7 @@ model.add_listener(MetricsListener())
 
 ---
 
-## 七、拓展建议
+## 八、拓展建议
 
 - **页面检测能力**：可接入 PaddleOCR / EasyOCR / OpenCV 图像匹配
 - **ADB 加固**：对接自定义风控 ADB 客户端，模拟真人操作轨迹
@@ -250,7 +281,7 @@ model.add_listener(MetricsListener())
 
 ---
 
-## 八、目录结构
+## 九、目录结构
 
 ```
 layernav_android/
@@ -258,6 +289,7 @@ layernav_android/
 │   ├── __init__.py          # 公开导出
 │   ├── _protocol.py         # AdbProtocol 接口
 │   ├── base.py              # LayerDef, LayerListener, BaseLayerModel
+│   ├── cold_start.py        # 通用冷启动工具
 │   └── contrib/
 │       ├── __init__.py
 │       ├── wechat.py        # WeChatGroupLayerModel（微信示例）
@@ -271,7 +303,7 @@ layernav_android/
 
 ---
 
-## 九、参与贡献
+## 十、参与贡献
 
 欢迎提交 Issue、PR，共建安卓自动化导航生态：
 
@@ -280,6 +312,6 @@ layernav_android/
 
 ---
 
-## 十、开源协议
+## 十一、开源协议
 
 本项目基于 [MIT License](LICENSE) 开源，可自由用于个人、商业项目。

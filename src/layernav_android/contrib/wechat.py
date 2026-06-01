@@ -21,6 +21,7 @@ import numpy as np
 
 from layernav_android._protocol import AdbProtocol
 from layernav_android.base import KEYCODE_BACK, KEYCODE_HOME, BaseLayerModel, LayerDef
+from layernav_android.cold_start import cold_start_app_from_launcher
 
 LOG = logging.getLogger("layernav.wechat")
 
@@ -30,6 +31,12 @@ WECHAT_PACKAGE = "com.tencent.mm"
 def _decode_png(data: bytes) -> np.ndarray:
     buf = np.frombuffer(data, dtype=np.uint8)
     return __import__("cv2").imdecode(buf, __import__("cv2").IMREAD_COLOR)
+
+
+def _calc_wechat_session_tab(screen_w: int, screen_h: int, scale_w: float) -> tuple[int, int]:
+    tab_x = max(24, min(screen_w - 24, int(round(screen_w * 0.10))))
+    tab_y = max(screen_h // 2, screen_h - int(round(56 * max(scale_w, 1e-6))))
+    return tab_x, tab_y
 
 
 class WeChatGroupLayerModel(BaseLayerModel):
@@ -92,7 +99,7 @@ class WeChatGroupLayerModel(BaseLayerModel):
         if detect_wechat_note_header(arr, scale_w) is not None:
             return "L3"
         if is_wechat_main_conversation_list_chrome(
-            arr, scale_w, require_visible_pinned_row=True,
+            arr, scale_w, require_visible_pinned_row=False,
         ):
             return "L1"
         if detect_wechat_main_bottom_tab_bar_four_columns(arr, scale_w):
@@ -112,7 +119,7 @@ class WeChatGroupLayerModel(BaseLayerModel):
         if detect_wechat_note_header(arr, scale_w) is not None:
             return "L3"
         if is_wechat_main_conversation_list_chrome(
-            arr, scale_w, require_visible_pinned_row=True,
+            arr, scale_w, require_visible_pinned_row=False,
         ):
             return "L1"
         if detect_wechat_main_bottom_tab_bar_four_columns(arr, scale_w):
@@ -187,10 +194,24 @@ class WeChatGroupLayerModel(BaseLayerModel):
         deadline_s: float = 20.0,
     ) -> None:
         LOG.info("_cold_start: HOME → WeChat → poll %s", target_layer)
+
+        png = adb.screencap()
+        arr = _decode_png(png)
+        h, w = arr.shape[:2]
+
+        tab_x, tab_y = _calc_wechat_session_tab(w, h, scale_w)
+
         adb.key_event(KEYCODE_HOME)
         time.sleep(0.8)
-        adb._run(["shell", "am", "start", "-n", "com.tencent.mm/.ui.LauncherUI"])
-        time.sleep(3.0)
+
+        cold_start_app_from_launcher(
+            adb, WECHAT_PACKAGE,
+            app_name="wechat", M=4, N=3,
+            session_tab_x=tab_x, session_tab_y=tab_y,
+            force_stop_before=True,
+            deadline_s=deadline_s,
+        )
+
         deadline = time.monotonic() + deadline_s
         while time.monotonic() < deadline:
             if self.detect(adb, scale_w) == target_layer:
