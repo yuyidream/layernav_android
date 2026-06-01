@@ -46,6 +46,15 @@ class LayerDef:
     detection: str
     """How this layer is detected (human-readable)."""
 
+    page_name: str = ""
+    """Optional custom page name. Callers can set this per-layer to
+    distinguish sub-states within a layer (e.g. main_list vs recent_page for L1).
+    Default empty string means no sub-page distinction."""
+
+    detection_extra: str = ""
+    """Optional detail about detection (human-readable, complementary to
+    *detection*). Callers can append custom context strings."""
+
 
 # ── Observer / Listener (inspired by python-statemachine's Listener pattern) ───
 
@@ -79,6 +88,23 @@ class LayerListener(Protocol):
         *ok* indicates whether the recovery succeeded.
         """
         ...
+
+
+# ── Layer detection result ──────────────────────────────────────────────────────
+
+
+@dataclass
+class DetectResult:
+    """Result of :meth:`BaseLayerModel.detect_detail`.
+
+    Combines layer key with optional page_name from :class:`LayerDef`.
+    """
+
+    layer_key: str
+    """Layer key: ``"L0"`` | ``"L1"`` | ``"L2"`` | ``"L3"``."""
+
+    page_name: str = ""
+    """Custom page name from :attr:`LayerDef.page_name`, or ``""``."""
 
 
 # ── Abstract base ─────────────────────────────────────────────────────────────
@@ -125,6 +151,40 @@ class BaseLayerModel:
     def detect(self, adb: AdbProtocol, scale_w: float) -> str:
         """Return current layer key.  Task MUST override."""
         raise NotImplementedError("subclass must override detect()")
+
+    def detect_detail(self, adb: AdbProtocol, scale_w: float) -> DetectResult:
+        """Return current layer key + custom page_name.
+
+        Default implementation calls :meth:`detect` and looks up
+        :attr:`LayerDef.page_name` from :attr:`layers`.  Subclasses
+        may override to set page_name dynamically.
+        """
+        layer_key = self.detect(adb, scale_w)
+        page_name = ""
+        for ld in self.layers:
+            if ld.key == layer_key:
+                page_name = ld.page_name
+                break
+        return DetectResult(layer_key=layer_key, page_name=page_name)
+
+    def _recover_to_page(
+        self,
+        layer: str,
+        page_name: str,
+        adb: AdbProtocol,
+        scale_w: float,
+    ) -> bool:
+        """Navigate to a specific sub-page within *layer* after recovery.
+
+        Called by :meth:`back_recover` (and :meth:`restore` when already
+        on the target layer) after reaching the correct layer.  Override
+        to handle sub-page navigation (e.g. switching tabs within L1).
+
+        Default: verify current page via :meth:`detect_detail` — returns
+        ``True`` if ``detect_detail().page_name == page_name``.
+        """
+        result = self.detect_detail(adb, scale_w)
+        return result.page_name == page_name
 
     def _on_L0(self, adb: AdbProtocol, scale_w: float, *, quick: bool = False) -> str | None:
         """L0 handler: home screen → cold-start App."""
@@ -237,11 +297,20 @@ class BaseLayerModel:
         return next_cur
 
     def back_recover(
-        self, adb: AdbProtocol, target_layer: str, scale_w: float
+        self,
+        adb: AdbProtocol,
+        target_layer: str,
+        scale_w: float,
+        *,
+        target_page: str | None = None,
     ) -> bool:
-        """Recover after BACK exhaustion: cold-start → fast-forward → normal
-        resume."""
-        LOG.warning("back_recover: cold-start → fast-forward → %s", target_layer)
+        """Recover after BACK exhaustion: cold-start → fast-forward → page.
+
+        If *target_page* is given, calls :meth:`_recover_to_page` after
+        reaching *target_layer*.
+        """
+        LOG.warning("back_recover: cold-start → fast-forward → %s (page=%s)",
+                     target_layer, target_page)
         adb.key_event(KEYCODE_HOME)
         time.sleep(0.8)
         self._cold_start(adb, "L1", scale_w)
@@ -251,23 +320,40 @@ class BaseLayerModel:
             self._notify_recovery(target_layer, False)
             return False
 
+        if target_page is not None:
+            page_ok = self._recover_to_page(
+                target_layer, target_page, adb, scale_w,
+            )
+            if not page_ok:
+                LOG.error(
+                    "back_recover: reached L%s but page=%s recovery failed",
+                    target_layer, target_page,
+                )
+                self._notify_recovery(target_layer, False)
+                return False
+
         result = self.detect(adb, scale_w) == target_layer
         self._notify_recovery(target_layer, result)
         return result
 
     # ── Combined API ──────────────────────────────────────────────────────────
 
-    def back(self, adb: AdbProtocol, to_layer: str, scale_w: float) -> bool:
+    def back(
+        self, adb: AdbProtocol, to_layer: str, scale_w: float, *,
+        target_page: str | None = None,
+    ) -> bool:
         """Retreat to *to_layer* via repeated BACK."""
         for _ in range(3):
             cur = self.detect(adb, scale_w)
             if cur == to_layer:
                 self._call_on_layer(to_layer, adb, scale_w, quick=False)
+                if target_page is not None:
+                    return self._recover_to_page(to_layer, target_page, adb, scale_w)
                 return True
             if cur == "L0":
                 break
             self.back_one(adb, scale_w)
-        return self.back_recover(adb, to_layer, scale_w)
+        return self.back_recover(adb, to_layer, scale_w, target_page=target_page)
 
     def advance(
         self, adb: AdbProtocol, target_layer: str, scale_w: float, *,
@@ -290,15 +376,27 @@ class BaseLayerModel:
                 return False
 
     def restore(
-        self, adb: AdbProtocol, target_layer: str, scale_w: float
+        self, adb: AdbProtocol, target_layer: str, scale_w: float, *,
+        target_page: str | None = None,
     ) -> bool:
-        """Restore to *target_layer* from any position."""
+        """Restore to *target_layer* (and optionally *target_page*) from any position.
+
+        If already on *target_layer* but page mismatch, calls
+        :meth:`_recover_to_page` without cold-start.
+        """
         cur = self.detect(adb, scale_w)
         if cur == target_layer:
+            if target_page is not None:
+                return self._recover_to_page(target_layer, target_page, adb, scale_w)
             return True
         ci = self._layer_index(cur)
         ti = self._layer_index(target_layer)
         if ci > ti:
-            return self.back(adb, target_layer, scale_w)
+            return self.back(adb, target_layer, scale_w, target_page=target_page)
         else:
-            return self.advance(adb, target_layer, scale_w, quick=True)
+            ok = self.advance(adb, target_layer, scale_w, quick=True)
+            if not ok:
+                return False
+            if target_page is not None:
+                return self._recover_to_page(target_layer, target_page, adb, scale_w)
+            return True

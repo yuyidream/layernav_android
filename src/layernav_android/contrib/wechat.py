@@ -52,9 +52,12 @@ class WeChatGroupLayerModel(BaseLayerModel):
 
     layers = [
         LayerDef("L0", "home", "手机主屏幕", "foreground ≠ com.tencent.mm"),
-        LayerDef("L1", "main_list", "微信主会话列表", "is_main_list_chrome()"),
-        LayerDef("L2", "chat", "群聊天界面", "WeChat FG + no tabs4 + no notes"),
-        LayerDef("L3", "notes", "微信笔记", "detect_note_header()"),
+        LayerDef("L1", "main_list", "微信主会话列表", "is_main_list_chrome()",
+                 page_name="chat_list"),
+        LayerDef("L2", "chat", "群聊天界面", "WeChat FG + no tabs4 + no notes",
+                 page_name="chat_view"),
+        LayerDef("L3", "notes", "微信笔记", "detect_note_header()",
+                 page_name="note_detail"),
     ]
 
     def __init__(self) -> None:
@@ -221,3 +224,48 @@ class WeChatGroupLayerModel(BaseLayerModel):
         raise TimeoutError(
             f"cold-start WeChat: did not reach {target_layer} within {deadline_s}s"
         )
+
+    # ── Page recovery ─────────────────────────────────────────────────────────
+
+    _TAB_INDEX_MAP: dict[str, int] = {
+        # WeChat bottom 4-tab bar (0=微信, 1=通讯录, 2=发现, 3=我)
+        "chat_list": 0,
+        "contacts":   1,
+        "discover":   2,
+        "profile":    3,
+    }
+
+    def _recover_to_page(
+        self, layer: str, page_name: str, adb: AdbProtocol, scale_w: float,
+    ) -> bool:
+        """Navigate to a specific sub-page within *layer* after recovery.
+
+        For L1 (WeChat main tabs):
+            - ``chat_list`` → tap WeChat tab (0)
+            - ``contacts``  → tap Contacts tab (1)
+            - ``discover``  → tap Discover tab (2)
+            - ``profile``   → tap Me tab (3)
+
+        Other layers / unknown pages fall back to default
+        :meth:`BaseLayerModel._recover_to_page`.
+        """
+        if layer != "L1":
+            return super()._recover_to_page(layer, page_name, adb, scale_w)
+        if page_name not in self._TAB_INDEX_MAP:
+            return super()._recover_to_page(layer, page_name, adb, scale_w)
+
+        png = adb.screencap()
+        arr = _decode_png(png)
+        h, w = arr.shape[:2]
+        sw = max(scale_w, 1e-6)
+
+        # Calculate tab centers — 4 evenly-spaced bottom tabs
+        tab_y = max(h // 2, h - int(round(56 * sw)))
+        tab_width = w // 4
+        tab_idx = self._TAB_INDEX_MAP[page_name]
+        tab_x = tab_width // 2 + tab_idx * tab_width
+
+        LOG.info("_recover_to_page: L1 → %s tap (%d, %d)", page_name, tab_x, tab_y)
+        adb.tap(tab_x, tab_y)
+        time.sleep(0.5)
+        return self.detect_detail(adb, scale_w).page_name == page_name

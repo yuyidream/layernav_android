@@ -1,6 +1,7 @@
 from layernav_android._protocol import AdbProtocol
 from layernav_android.base import (
     BaseLayerModel,
+    DetectResult,
     KEYCODE_BACK,
     KEYCODE_HOME,
     LayerDef,
@@ -18,6 +19,7 @@ __all__ = [
     "APP_DEFAULTS",
     "BaseLayerModel",
     "cold_start_app_from_launcher",
+    "DetectResult",
     "dock_app_icon_coords",
     "KEYCODE_BACK",
     "KEYCODE_HOME",
