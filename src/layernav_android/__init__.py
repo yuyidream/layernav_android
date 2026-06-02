@@ -6,7 +6,6 @@ from layernav_android.base import (
     KEYCODE_HOME,
     LayerDef,
     LayerListener,
-    POST_TRANSITION_SLEEP,
 )
 from layernav_android.cold_start import (
     APP_DEFAULTS,
@@ -25,5 +24,4 @@ __all__ = [
     "KEYCODE_HOME",
     "LayerDef",
     "LayerListener",
-    "POST_TRANSITION_SLEEP",
 ]

@@ -22,10 +22,13 @@ from layernav_android._protocol import AdbProtocol
 
 LOG = logging.getLogger("layernav")
 
-POST_TRANSITION_SLEEP = 1.5
-
 KEYCODE_BACK = 4
 KEYCODE_HOME = 3
+
+# enter_next polling intervals (no fixed pre-wait — pure adaptive poll)
+_ENTER_NEXT_POLL_INITIAL = 0.3
+_ENTER_NEXT_POLL_STEP   = 0.3
+_ENTER_NEXT_POLL_MAX    = 2.0
 
 # ── Layer definition ──────────────────────────────────────────────────────────
 
@@ -245,37 +248,35 @@ class BaseLayerModel:
         1. detect current layer  ← **guard** (pre-check)
         2. call _on_L[cur](quick) — handler does business + tap
         3. if handler returns None or same layer → stop (success)
-        4. wait POST_TRANSITION_SLEEP, then detect  ← **validator** (post-check)
-        5. if not yet on target, poll with increasing intervals up to max_wait_s
+        4. poll detect() at adaptive intervals (0.3s→0.6s→…→2.0s)
+           until target layer reached or *max_wait_s* elapsed
+           ← **validator** (post-check, no fixed pre-wait)
 
-        This handles variable transition times (network loading, animations).
+        This handles variable transition times (network loading, animations)
+        without a single fixed wait — fast transitions hit on the first or
+        second poll, slow ones are covered by the growing interval up to
+        *max_wait_s*.
         """
         cur = self.detect(adb, scale_w)
         target = self._call_on_layer(cur, adb, scale_w, quick=quick)
         if target is None or target == cur:
             return True
 
-        time.sleep(POST_TRANSITION_SLEEP)
-        next_cur = self.detect(adb, scale_w)
-        if next_cur == target:
-            self._notify_transition(cur, next_cur, "enter_next")
-            return True
-
         poll_start = time.monotonic()
         deadline = poll_start + max_wait_s
-        interval = 0.5
+        interval = _ENTER_NEXT_POLL_INITIAL
         while time.monotonic() < deadline:
             time.sleep(interval)
             next_cur = self.detect(adb, scale_w)
             if next_cur == target:
                 self._notify_transition(cur, next_cur, "enter_next")
                 return True
-            interval = min(interval + 0.5, 2.0)
+            interval = min(interval + _ENTER_NEXT_POLL_STEP, _ENTER_NEXT_POLL_MAX)
 
         elapsed = time.monotonic() - poll_start
         LOG.warning(
-            "enter_next: %s→%s timeout after %.1fs — still on %s",
-            cur, target, max_wait_s, next_cur,
+            "enter_next: %s→%s timeout after %.1fs (still on %s)",
+            cur, target, elapsed, self.detect(adb, scale_w),
         )
         self._notify_timeout(cur, target, elapsed)
         return False

@@ -83,6 +83,7 @@ def cold_start_app_from_launcher(
     session_tab_y: int | None = None,
     force_stop_before: bool = True,
     deadline_s: float = 25.0,
+    allow_reboot: bool = False,
 ) -> bool:
     """Cold-start *package* from the Android launcher and optionally tap a session tab.
 
@@ -99,6 +100,15 @@ def cold_start_app_from_launcher(
             「微信」 bottom tab).
         force_stop_before: issue ``am force-stop`` before cold-start.
         deadline_s: maximum time budget for the whole cold-start.
+        allow_reboot: if ``True`` and all three launch paths fail, issue
+            ``adb reboot`` as a last-resort recovery, wait for the device
+            to finish booting, then retry from path 1.
+
+            .. warning::
+
+               Reboot adds 60–120 s.  The device must be able to reach the
+               home screen without manual intervention (no PIN / pattern
+               lock).  Defaults to ``False``.
 
     Returns:
         ``True`` if *package* is the foreground app after cold-start.
@@ -137,6 +147,44 @@ def cold_start_app_from_launcher(
     )
     if _try_dock_tap_with_retry(adb, package, dx, dy, session_tab_x, session_tab_y):
         if time.monotonic() < deadline and _check_foreground(adb, package):
+            return True
+
+    # -- path 4: adb reboot (opt-in, very slow) --
+    if not allow_reboot:
+        return False
+
+    LOG.warning("cold_start: all 3 launch paths failed, rebooting device")
+    try:
+        adb._run(["reboot"])
+    except Exception as exc:
+        LOG.error("cold_start: adb reboot failed (%s)", exc)
+        return False
+
+    # Wait for device to disconnect + come back
+    time.sleep(5)
+    _wait_for_device(adb, timeout_s=90)
+    _wait_for_boot_completed(adb, timeout_s=60)
+    # Retry path 1 after reboot
+    screen_w2, screen_h2 = _resolve_screen_size(adb)
+    scale_w2 = screen_w2 / 1080.0
+    if force_stop_before:
+        try:
+            adb._run(["shell", "am", "force-stop", package])
+        except Exception:
+            pass
+        time.sleep(0.65)
+    if _try_monkey(adb, package):
+        time.sleep(1.5)
+        _tap_session_tab(adb, session_tab_x, session_tab_y)
+        if _check_foreground(adb, package):
+            LOG.info("cold_start: succeeded after reboot")
+            return True
+    dx2, dy2 = dock_app_icon_coords(
+        screen_w2, screen_h2, scale_w2, app_name=app_name, M=M, N=N,
+    )
+    if _try_dock_tap_with_retry(adb, package, dx2, dy2, session_tab_x, session_tab_y):
+        if _check_foreground(adb, package):
+            LOG.info("cold_start: succeeded after reboot + Dock")
             return True
 
     return False
@@ -222,3 +270,33 @@ def _check_foreground(adb: AdbProtocol, package: str) -> bool:
         return adb.foreground_package() == package
     except Exception:
         return False
+
+
+def _wait_for_device(adb: AdbProtocol, timeout_s: float = 90) -> None:
+    """Poll ``adb shell echo ok`` until the device is back online."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            out = adb._run(["shell", "echo", "ok"])
+            if "ok" in out:
+                LOG.info("cold_start: device back online after reboot")
+                return
+        except Exception:
+            pass
+        time.sleep(3)
+    LOG.warning("cold_start: device did not come back within %.0fs", timeout_s)
+
+
+def _wait_for_boot_completed(adb: AdbProtocol, timeout_s: float = 60) -> None:
+    """Poll ``getprop sys.boot_completed`` until ``1``."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            out = adb._run(["shell", "getprop", "sys.boot_completed"])
+            if out.strip() == "1":
+                LOG.info("cold_start: boot completed")
+                return
+        except Exception:
+            pass
+        time.sleep(3)
+    LOG.warning("cold_start: boot did not complete within %.0fs", timeout_s)

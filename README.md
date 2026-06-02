@@ -15,15 +15,13 @@
 
 ## 一、项目介绍
 
-市面上主流 ADB / UI 自动化库仅提供点击、滑动、返回等基础原子能力，**缺少页面状态校验、层级管理、异常恢复**，脚本极易因页面跳转失败、APP 卡死、返回失灵而中断。
-
-本框架基于 **L0~Ln 页面层级模型** 设计，将手机桌面、APP 主页、内容页、详情页抽象为标准化层级，内置「动作执行 → 截屏校验 → 自动重试 → 冷启动恢复」全链路能力，大幅提升自动化脚本稳定性与开发效率。
+市面上主流 ADB / UI 自动化库仅提供点击、滑动、返回等基础原子能力，**缺少页面状态校验、层级管理、异常恢复**。本框架基于 **L0~Ln 页面层级模型** 设计，将桌面、APP主页、内容页、详情页抽象为标准化层级，内置「动作执行 → 截屏校验 → 自动重试 → 冷启动恢复」全链路能力。
 
 ### 核心定位
 
-- 不是通用 UI 自动化库，而是 **导航调度 + 容错引擎**
-- 框架负责：层级检测、跳转校验、后退/前进/恢复逻辑、异常兜底
-- 业务脚本负责：控件点击、数据采集、业务逻辑（职责彻底分离）
+- 导航调度 + 容错引擎
+- 框架负责：层级检测、跳转校验、后退/前进/恢复、**子页面导航**
+- 业务脚本负责：控件点击、数据采集、业务逻辑
 
 ---
 
@@ -34,6 +32,9 @@
 
 ✅ **闭环跳转校验**
 执行操作后自动截屏检测页面，**拒绝盲操作**，跳转失败即时感知。guard（前置校验）+ validator（后置轮询）语义分离。
+
+✅ **同层多页面导航（v0.3.0）**
+`detect_detail()` 一次截图返回层级 + 子页面；`back_recover` / `back` / `restore` 支持 `target_page` 参数，恢复后自动精确定位到指定子页面。
 
 ✅ **完整导航原子 API**
 内置 `detect / enter_next / back_one / back_recover` 四原子操作 + `advance / back / restore` 三组合操作，一行代码完成跨层级跳转。
@@ -67,13 +68,33 @@ L3     三级详情页
 Ln     最深业务层级
 ```
 
+#### 同层多页面支持（v0.3.0）
+
+同一个层级可包含多个子页面（如 L1 的会话列表/通讯录/发现/我）。`LayerDef` 通过 `page_name` 和 `detection_extra` 字段声明：
+
+```python
+layers = [
+    LayerDef("L1", "main_list", "微信主界面", "is_main_list_chrome()",
+             page_name="chat_list",
+             detection_extra="子页面: chat_list/contacts/discover/profile"),
+]
+```
+
+| 能力 | 方法 | 说明 |
+|------|------|------|
+| 子页面检测 | `detect_detail() → DetectResult` | 返回 `(layer_key, page_name)` |
+| 子页面恢复 | `restore(..., target_page="chat_list")` | 到达目标层后调用 `_recover_to_page` |
+| Tab 切换（L1） | `WeChatGroupLayerModel._recover_to_page` | 框架自动计算底部 tab 坐标并点击 |
+| 校验型（L2/L3） | `detect_detail` 验证 | 无需额外操作，校验 page_name 即可 |
+
 ### 2. 职责划分
 
 | 模块 | 框架能力 | Task 能力 |
 |------|---------|----------|
-| 状态检测 | 调用 `detect()`、校验结果 | 实现截图/识别逻辑 |
+| 状态检测 | 调用 `detect()` / `detect_detail()`、校验结果 | 实现截图/识别逻辑 |
 | 页面动作 | 流程调度、等待、重试 | 实现 `_on_Lx` 点击/滑动等业务动作 |
 | 导航逻辑 | `advance` / `back` / `restore` / 恢复 | 无 |
+| 子页面导航 | `detect_detail` / `_recover_to_page` | 无（框架提供 `target_page` 路由） |
 | 点击 | **不负责** — 框架不 `tap` | handler 内 `adb.tap()` |
 
 ### 3. 核心流程
@@ -128,7 +149,8 @@ from layernav_android import BaseLayerModel, LayerDef
 class DemoAppModel(BaseLayerModel):
     layers = [
         LayerDef(key="L0", name="desktop",   label_cn="手机桌面", detection="截屏识别桌面图标"),
-        LayerDef(key="L1", name="app_home",  label_cn="APP 主页", detection="OCR 识别主页文字"),
+        LayerDef(key="L1", name="app_home",  label_cn="APP 主页", detection="OCR 识别主页文字",
+                 page_name="home", detection_extra="子页面: home/search"),
         LayerDef(key="L2", name="content",   label_cn="内容列表页", detection="图像特征匹配"),
         LayerDef(key="L3", name="detail",    label_cn="详情页",   detection="模板匹配"),
     ]
@@ -172,12 +194,16 @@ class DemoAppModel(BaseLayerModel):
 model = DemoAppModel()
 adb = get_adb_client()
 
-# 智能恢复到 L1
-model.restore(adb, target_layer="L1", scale_w=1.0)
+# 检测层级 + 子页面
+dr = model.detect_detail(adb, scale_w=1.0)
+print(f"当前: {dr.layer_key} / {dr.page_name}")
+
+# 智能恢复到 L1 的 home 子页面
+model.restore(adb, target_layer="L1", scale_w=1.0, target_page="home")
 # 逐层前进到 L3
 model.advance(adb, target_layer="L3", scale_w=1.0)
-# 后退回 L1
-model.back(adb, to_layer="L1", scale_w=1.0)
+# 后退回 L1 的 search 子页面
+model.back(adb, to_layer="L1", scale_w=1.0, target_page="search")
 ```
 
 ### 3. 核心 API
@@ -187,17 +213,18 @@ model.back(adb, to_layer="L1", scale_w=1.0)
 | 方法 | 说明 |
 |------|------|
 | `detect(adb, scale_w) → str` | 检测当前所在层级（Task 覆盖实现） |
+| `detect_detail(adb, scale_w) → DetectResult` | 检测层级 + 子页面名称（v0.3.0，默认调用 `detect` + `LayerDef.page_name`） |
 | `enter_next(adb, scale_w, *, quick, max_wait_s) → bool` | 单步进入下一层 ← guard + validator + 轮询 |
 | `back_one(adb, scale_w) → str` | 单步 `KEYCODE_BACK`，返回新层级 |
-| `back_recover(adb, target, scale_w) → bool` | 故障恢复：HOME → 冷启动 → 快速前进 → 正常恢复 |
+| `back_recover(adb, target, scale_w, *, target_page=None) → bool` | 故障恢复：HOME → 冷启动 → 快速前进 → 子页面**（v0.3.0: 支持 `target_page`）** |
 
 **组合操作**
 
 | 方法 | 说明 |
 |------|------|
-| `back(adb, to_layer, scale_w) → bool` | 逐层后退至目标（3 次重试 → 恢复） |
+| `back(adb, to_layer, scale_w, *, target_page=None) → bool` | 逐层后退至目标（3 次重试 → 恢复）**（v0.3.0: 支持 `target_page`）** |
 | `advance(adb, target, scale_w, *, quick, max_wait_s) → bool` | 逐层前进至目标（目标层 always `quick=False`） |
-| `restore(adb, target, scale_w) → bool` | 智能判断方向，从任意位置恢复至目标 |
+| `restore(adb, target, scale_w, *, target_page=None) → bool` | 智能判断方向，从任意位置恢复至目标 + 子页面**（v0.3.0: 支持 `target_page`）** |
 
 **可观测**
 
@@ -248,9 +275,41 @@ ok = cold_start_app_from_launcher(
 
 **关键设计**：使用普通 ADB tap（非防风控触控），因为是系统级操作（桌面 Dock 图标点击），不涉及 APP 内反爬检测，方便所有系统集成。
 
+**最后一搏 — adb reboot 兜底**（`allow_reboot=True`，默认关闭）：
+
+当 monkey、am start、Dock icon tap 三条路径全部失败时，可选执行 `adb reboot` 作为终极恢复手段。重启后等待设备上线 + boot 完成，然后重新尝试 monkey 启动。
+
+> ⚠️ 重启耗时 60–120 s，且要求设备无需手动解锁（无 PIN/图案锁）。适用于无人值守的 7×24 自动化。
+
 ---
 
-## 六、适用场景
+## 六、微信主界面会话列表归位
+
+`layernav_android.contrib.wechat` 提供 `reposition_wechat_to_list_top`，实现从任意 WeChat 状态 → 归位到会话列表顶端的完整流程：
+
+```python
+from layernav_android.contrib.wechat import (
+    reposition_wechat_to_list_top, RepositionResult, _REPOSITION_FROM_LO,
+)
+
+result = reposition_wechat_to_list_top(
+    adb, scale_w=1.0, screen_w=1080, screen_h=2248,
+    deadline_s=60.0,
+    require_visible_pinned_row=False,
+)
+print(f"归位: {'OK' if result.ok else 'FAIL'} ({result.reason})")
+print(f"  swipes: {result.swipes_used}  early_stop: {result.early_stop_triggered}")
+```
+
+**手势参数**（三设备统一，真机 10 轮验证 100%）：`from ∈ [13%, 25%]` 随机 + `L ∈ [30%, 42%]` 随机 → `to = min(99%, from+L)`。
+
+**重试策略**：失败后同范围重新采样最多 3 次；连续 2 次失败后 dHash 交叉校验信号可信度；3 次仍失败则冷启动兜底。
+
+**手势方式**：仅使用 `AdbProtocol.swipe()` 直线滑动（`adb shell input swipe`），贝塞尔曲线 / `sendevent` / `input motionevent` 已禁用（D1 Android 10 实测不产生触摸效果）。抗风控通过随机 `from` / `L` 采样实现。
+
+---
+
+## 七、适用场景
 
 - **APP 合规数据采集** — 内容抓取、列表遍历、批量浏览
 - **移动端 RPA 自动化** — 账号矩阵、批量操作、运营工具
@@ -259,11 +318,12 @@ ok = cold_start_app_from_launcher(
 
 ---
 
-## 七、优势对比
+## 八、优势对比
 
 | 能力 | 本框架 | Appium / uiautomator2 / Airtest |
 |------|--------|---------------------------------|
 | 标准化页面层级 | ✅ 内置模型 | ❌ 无统一抽象 |
+| 同层多页面导航 | ✅ `detect_detail` + `_recover_to_page` | ❌ 需手动分支 |
 | 操作后页面校验 | ✅ 闭环 guard + validator | ❌ 仅执行动作，不校验结果 |
 | 自动后退恢复 | ✅ 3 次重试 + 冷启动兜底 | ❌ 需手动编写重试逻辑 |
 | 层级穿越 API | ✅ `advance` / `back` / `restore` | ❌ 仅基础点击/返回 |
@@ -272,7 +332,7 @@ ok = cold_start_app_from_launcher(
 
 ---
 
-## 八、拓展建议
+## 九、拓展建议
 
 - **页面检测能力**：可接入 PaddleOCR / EasyOCR / OpenCV 图像匹配
 - **ADB 加固**：对接自定义风控 ADB 客户端，模拟真人操作轨迹
@@ -281,7 +341,7 @@ ok = cold_start_app_from_launcher(
 
 ---
 
-## 九、目录结构
+## 十、目录结构
 
 ```
 layernav_android/
@@ -289,7 +349,7 @@ layernav_android/
 │   ├── __init__.py          # 公开导出
 │   ├── _protocol.py         # AdbProtocol 接口
 │   ├── base.py              # LayerDef, LayerListener, BaseLayerModel
-│   ├── cold_start.py        # 通用冷启动工具
+│   ├── cold_start.py        # 通用冷启动工具（含 adb reboot 兜底）
 │   └── contrib/
 │       ├── __init__.py
 │       ├── wechat.py        # WeChatGroupLayerModel（微信示例）

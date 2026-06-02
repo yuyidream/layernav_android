@@ -106,11 +106,9 @@ enter_next(*, quick):
     2. result = _on_L[cur](adb, scale_w, quick=quick)   ← 调 handler（handler 执行业务+点击）
     3. if result is None or result == cur:
          return True                                     ← handler 说无需前进
-    4. sleep(POST_TRANSITION_SLEEP)
-    5. next_cur = detect()                               ← ★ 进入后立即检查目标层级
-    6. if next_cur == result: return True
-    7. 轮询 detect()，间隔 0.5s→1.0s→1.5s→2.0s，最长 8s  ← 应对慢加载
-    8. 超时未到达 → return False
+    4. 轮询 detect()，间隔 0.3s→0.6s→0.9s→1.2s→1.5s→2.0s，最长 8s  ← ★ 纯自适应轮询，无固定预等待
+    5. 命中目标 → return True
+    6. 超时未到达 → return False
 ```
 
 `quick` 参数透传给 handler。
@@ -381,6 +379,9 @@ def cold_start_app_from_launcher(
 7. ↓ 如果仍然失败:
 8. dock_app_icon_coords(app_name, M, N) → tap  ← Dock 图标兜底（0.5s 预等 + 最多重试 2 次）
 9. [可选] tap session_tab
+10. ↓ 如果 allow_reboot=True 且上面全部失败:
+11. adb reboot → 等待设备上线 → 等待 boot_completed  ← 终极兜底（默认关闭）
+12. → 重新执行 monkey 启动 + tap session_tab
 ```
 
 ### §9.4 Dock 坐标公式
@@ -424,6 +425,83 @@ cold_start_app_from_launcher(
 
 - **使用普通 ADB tap**（非防风控触控）：冷启动是系统级操作（桌面 Dock 图标点击），不涉及 APP 内反爬检测，使用 `AdbProtocol.tap()` 即可，方便所有系统集成。
 - **屏幕尺寸自动获取**：`screen_w` / `screen_h` / `scale_w` 不再作为参数，函数内部通过 `adb shell wm size` 自动获取。调用方只需传 `app_name` / `M` / `N` 三个核心参数即可计算出 Dock 图标坐标。
-- **三条冷启动路径**：monkey（主路径）→ am start Intent（定制 ROM 备选）→ Dock 图标点击（兜底，含 0.5s 预等待 + 最多 2 次重试），覆盖大部分设备和 ROM。
+- **四条冷启动路径**：monkey（主路径）→ am start Intent（定制 ROM 备选）→ Dock 图标点击（兜底，含 0.5s 预等待 + 最多 2 次重试）→ adb reboot（终极兜底，`allow_reboot=True` 且前 3 条均失败后触发）。覆盖大部分设备和 ROM。
 - `force_stop` 通过 `adb._run(["shell", "am", "force-stop", package])` 实现，无需额外接口。
 - 返回值 `bool` 表示 `foreground_package() == package`，调用方需自行判断是否到达目标层级。
+
+### §9.7 adb reboot 兜底
+
+当 `allow_reboot=True` 且三条启动路径全部失败时，执行系统重启作为终极恢复：
+
+1. 调用 `adb._run(["reboot"])` 重启设备
+2. 每 3 s 轮询 `adb shell echo ok` 等待设备恢复连接（最长 90 s）
+3. 每 3 s 轮询 `adb shell getprop sys.boot_completed` 等待系统启动完成（最长 60 s）
+4. 重新执行 monkey 启动 + session tab 点击
+
+> ⚠️ 重启总耗时 60–120 s，且要求设备无需手动解锁（无 PIN / 图案锁）。默认关闭。仅适用于无人值守的 7×24 自动化场景。
+
+---
+
+## §10. 微信主界面会话列表归位 —— `reposition_wechat_to_list_top`
+
+### §10.1 设计动机
+
+微信采集自动化中，需要在进入群聊前将微信前台归位到**主界面会话列表最顶端**。此操作包含导航（L2/L0→L1）和锚点下拉（触发「最近」页面），是从 `collector_phone_android` 抽取到框架层的完整归位功能。
+
+### §10.2 函数签名
+
+```python
+from layernav_android.contrib.wechat import (
+    reposition_wechat_to_list_top, RepositionResult,
+)
+
+def reposition_wechat_to_list_top(
+    adb: AdbProtocol,
+    *,
+    scale_w: float,
+    screen_w: int,
+    screen_h: int,
+    deadline_s: float = 60.0,
+    require_visible_pinned_row: bool = False,
+) -> RepositionResult:
+```
+
+| 参数 | 说明 | 默认 |
+|---|---|---|
+| `adb` | ADB 客户端（需实现 `swipe`） | — |
+| `scale_w` | `screen_w / 1080.0` | — |
+| `screen_w`, `screen_h` | 设备分辨率 | — |
+| `deadline_s` | 总超时 | `60.0` |
+| `require_visible_pinned_row` | 终检是否要求置顶行可见 | `False` |
+
+### §10.3 归位流程
+
+```
+1. detect_detail → 获取当前 layer + page
+2. L2 → KEYCODE_BACK (单次)
+   L0/其他 → restore(adb, "L1", target_page="chat_list")  (冷启动)
+   L1 → 已在主列表，跳过
+3. 下拉锚点循环：
+   a. 随机采样: from∈[13%,25%], L∈[30%,42%], to=min(99%,from+L)
+   b. adb.swipe(x_mid, y_s, x_mid, y_e, duration=380ms)
+   c. 截图 → _recent_pull_top_heading_likely (单门早停)
+   d. 失败 → 重试（同范围重新采样，最多 3 次）
+   e. 连续 2 次失败 → dHash64 交叉校验信号可信度
+   f. 3 次仍失败 → 冷启动兜底 (restore→L1 chat_list)
+4. 点击底部「微信」Tab → 回到主列表顶端
+5. is_wechat_main_conversation_list_chrome() 终检
+```
+
+### §10.4 手势参数
+
+三设备统一 `from × L` 模型，2026-06-02 真机 10 轮验证 100%：
+
+| 参数 | 范围 | 说明 |
+|---|---|---|
+| `_REPOSITION_FROM_LO/HI` | 13% / 25% | 起点在屏高范围内随机 |
+| `_REPOSITION_L_LO/HI` | 30% / 42% | 直线长度在范围内随机 |
+| `_REPOSITION_MAX_RETRIES` | 3 | 单轮最大重试次数 |
+
+- 手势方式：仅 `adb shell input swipe` 直线滑动（贝塞尔曲线 / sendevent 已禁用）
+- 抗风控：随机采样
+- 依赖：`collector_phone_android.vision.template_matcher`（lazy import）

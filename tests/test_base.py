@@ -13,7 +13,6 @@ from layernav_android import (
     KEYCODE_HOME,
     LayerDef,
     LayerListener,
-    POST_TRANSITION_SLEEP,
 )
 
 
@@ -251,7 +250,7 @@ class TestAdvance:
     def test_advance_stops_on_enter_next_failure(self):
         m = _TestModel()
         adb = MockAdb()
-        m._detect_returns = ["L1", "L1", "L1", "L1"]
+        m._detect_returns = ["L1", "L1", "L1", "L1", "L1"]
 
         ok = m.advance(adb, "L2", 1.0, max_wait_s=1.0)
         assert ok is False
@@ -302,8 +301,19 @@ class TestBackRecover:
         m = _TestModel()
         adb = MockAdb()
 
+        # advance(L1) → enter_next(L0→L1) polls with default max_wait_s=8.0:
+        # guard + 7 polls + timeout detect = 9 returns
         m._detect_returns = [
-            "L0",  # advance detect → not L1 → enter_next → timeout
+            "L0",  # advance: cur = detect → L0, not L1 → enter_next
+            "L0",  # enter_next guard
+            "L0",  # poll 1 (0.3s)
+            "L0",  # poll 2 (0.6s→cum 0.9s)
+            "L0",  # poll 3 (0.9s→cum 1.8s)
+            "L0",  # poll 4 (1.2s→cum 3.0s)
+            "L0",  # poll 5 (1.5s→cum 4.5s)
+            "L0",  # poll 6 (2.0s→cum 6.5s)
+            "L0",  # poll 7 (2.0s→cum 8.5s > 8.0 → exit)
+            "L0",  # timeout log detect
         ]
         ok = m.back_recover(adb, "L1", 1.0)
         assert ok is False
@@ -329,11 +339,23 @@ class TestListener:
         m.add_listener(lst)
         adb = MockAdb()
 
+        # back() loop: 3 iterations → break at L0 → back_recover(L1)
+        # back_recover → advance(L1) → enter_next(L0→L1) timeout (default max_wait_s=8.0)
         m._detect_returns = [
-            "L2", "L2", "L2",
-            "L2", "L2", "L2",
-            "L2", "L2", "L0",
-            "L0",
+            "L2", "L2", "L2",  # back iter 1
+            "L2", "L2", "L2",  # back iter 2
+            "L2", "L2", "L0",  # back iter 3: break at L0
+            # back_recover → advance → enter_next polls:
+            "L0",  # advance cur detect
+            "L0",  # enter_next guard
+            "L0",  # poll 1
+            "L0",  # poll 2
+            "L0",  # poll 3
+            "L0",  # poll 4
+            "L0",  # poll 5
+            "L0",  # poll 6
+            "L0",  # poll 7 (cum ~8.5s > 8.0 → exit)
+            "L0",  # timeout log detect
         ]
         ok = m.back(adb, "L1", 1.0)
         assert ok is False
