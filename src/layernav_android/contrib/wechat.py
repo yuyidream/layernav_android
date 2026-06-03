@@ -298,19 +298,24 @@ class WeChatGroupLayerModel(BaseLayerModel):
 # 新代码请直接：
 #   from mum.android.wechat.reposition import (
 #       reposition_wechat_to_list_top, RepositionResult,
+#       _REPOSITION_MAX_RETRIES,
+#   )
+#   from mum.android.base.adb.scroll import (
 #       _REPOSITION_FROM_LO, _REPOSITION_FROM_HI,
-#       _REPOSITION_L_LO, _REPOSITION_L_HI, _REPOSITION_MAX_RETRIES,
+#       _REPOSITION_L_LO, _REPOSITION_L_HI,
 #   )
 from mum.android.wechat.reposition import (  # noqa: F401 E402
     _reposition_dhash64,
     _reposition_hamming,
     RepositionResult,
     reposition_wechat_to_list_top,
+    _REPOSITION_MAX_RETRIES,
+)
+from mum.android.base.adb.scroll import (  # noqa: F401 E402
     _REPOSITION_FROM_LO,
     _REPOSITION_FROM_HI,
     _REPOSITION_L_LO,
     _REPOSITION_L_HI,
-    _REPOSITION_MAX_RETRIES,
 )
 
 import random as _random
@@ -347,7 +352,7 @@ def _get_android_version(adb: AdbProtocol) -> int:
         return 0
 
 
-def session_list_content_scroll_down(
+def scroll_down(
     adb: AdbProtocol,
     *,
     screen_w: int,
@@ -384,7 +389,7 @@ def session_list_content_scroll_down(
         duration_ms = max(100, int(round(actual_L * screen_h / _SESSION_LIST_SCROLL_DOWN_VELOCITY_MAX)))
 
     LOG.info(
-        "session_list_content_scroll_down: swipe (%d,%d)->(%d,%d)"
+        "scroll_down: swipe (%d,%d)->(%d,%d)"
         " from=%.1f%% to=%.1f%% L=%.1f%% dur=%dms v=%.1fpx/ms android=%d",
         x_mid, y_s, x_mid, y_e,
         from_ratio * 100, to_ratio * 100, actual_L * 100,
@@ -400,7 +405,7 @@ def session_list_content_scroll_down(
     }
 
 
-def session_list_content_scroll_up(
+def scroll_up_base(
     adb: AdbProtocol,
     *,
     screen_w: int,
@@ -439,7 +444,7 @@ def session_list_content_scroll_up(
         duration_ms = max(100, int(round(actual_L * screen_h / _SESSION_LIST_SCROLL_DOWN_VELOCITY_MAX)))
 
     LOG.info(
-        "session_list_content_scroll_up: swipe (%d,%d)->(%d,%d)"
+        "scroll_up_base: swipe (%d,%d)->(%d,%d)"
         " from=%.1f%% to=%.1f%% L=%.1f%% dur=%dms v=%.1fpx/ms android=%d",
         x_mid, y_s, x_mid, y_e,
         from_ratio * 100, to_ratio * 100, actual_L * 100,
