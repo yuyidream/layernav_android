@@ -7,7 +7,7 @@ class AdbProtocol(Protocol):
     """Minimal ADB interface for layer navigation.
 
     Users implement or inject their existing ADB client.
-    ``collector_phone_android``'s ``AdbClient`` already satisfies
+    Any ``AdbClient`` that implements these methods satisfies
     this protocol — no adapter needed.
     """
 

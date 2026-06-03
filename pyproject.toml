@@ -34,7 +34,6 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-cov>=5.0", "numpy>=1.24", "opencv-python>=4.8"]
-wechat = ["opencv-python>=4.8", "numpy>=1.24"]
 
 [project.urls]
 Homepage = "https://github.com/yuyidream/layernav_android"

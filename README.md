@@ -121,7 +121,7 @@ pip install layernav_android
 如需使用 WeChat contrib 模块，需额外安装 `opencv-python` 和 `numpy`：
 
 ```bash
-pip install layernav_android[wechat]
+pip install opencv-python numpy
 ```
 
 **方式二：从源码安装**

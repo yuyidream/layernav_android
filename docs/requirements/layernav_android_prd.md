@@ -1,6 +1,6 @@
 # layernav_android 框架 PRD
 
-> 原文件：`collector_phone_android/docs/adr/layer_model_framework_prd.md`
+> 原文件：`collector_phone_android/docs/adr/layer_model_framework_prd.md`（归档）
 > 迁移日期：2026-05-31
 
 ---
@@ -441,69 +441,3 @@ cold_start_app_from_launcher(
 > ⚠️ 重启总耗时 60–120 s，且要求设备无需手动解锁（无 PIN / 图案锁）。默认关闭。仅适用于无人值守的 7×24 自动化场景。
 
 ---
-
-## §10. 微信主界面会话列表归位 —— `reposition_wechat_to_list_top`
-
-> **状态**：已迁移至 `mum.android.wechat.reposition`（v0.1+）。本节内容保留归档参考，实际实现见 mum 仓库。
-
-### §10.1 设计动机
-
-微信采集自动化中，需要在进入群聊前将微信前台归位到**主界面会话列表最顶端**。此操作包含导航（L2/L0→L1）和锚点下拉（触发「最近」页面），是从 `collector_phone_android` 抽取的完整归位功能。
-
-### §10.2 函数签名
-
-```python
-from mum.android.wechat.reposition import (
-    reposition_wechat_to_list_top, RepositionResult,
-)
-
-def reposition_wechat_to_list_top(
-    adb: AdbProtocol,
-    *,
-    scale_w: float,
-    screen_w: int,
-    screen_h: int,
-    deadline_s: float = 60.0,
-    require_visible_pinned_row: bool = False,
-) -> RepositionResult:
-```
-
-| 参数 | 说明 | 默认 |
-|---|---|---|
-| `adb` | ADB 客户端（需实现 `swipe`） | — |
-| `scale_w` | `screen_w / 1080.0` | — |
-| `screen_w`, `screen_h` | 设备分辨率 | — |
-| `deadline_s` | 总超时 | `60.0` |
-| `require_visible_pinned_row` | 终检是否要求置顶行可见 | `False` |
-
-### §10.3 归位流程
-
-```
-1. detect_detail → 获取当前 layer + page
-2. L2 → KEYCODE_BACK (单次)
-   L0/其他 → restore(adb, "L1", target_page="chat_list")  (冷启动)
-   L1 → 已在主列表，跳过
-3. 下拉锚点循环：
-   a. 随机采样: from∈[13%,25%], L∈[30%,42%], to=min(99%,from+L)
-   b. adb.swipe(x_mid, y_s, x_mid, y_e, duration=380ms)
-   c. 截图 → _recent_pull_top_heading_likely (单门早停)
-   d. 失败 → 重试（同范围重新采样，最多 3 次）
-   e. 连续 2 次失败 → dHash64 交叉校验信号可信度
-   f. 3 次仍失败 → 冷启动兜底 (restore→L1 chat_list)
-4. 点击底部「微信」Tab → 回到主列表顶端
-5. is_wechat_main_conversation_list_chrome() 终检
-```
-
-### §10.4 手势参数
-
-三设备统一 `from × L` 模型，2026-06-02 真机 10 轮验证 100%：
-
-| 参数 | 范围 | 说明 |
-|---|---|---|
-| `_REPOSITION_FROM_LO/HI` | 13% / 25% | 起点在屏高范围内随机 |
-| `_REPOSITION_L_LO/HI` | 30% / 42% | 直线长度在范围内随机 |
-| `_REPOSITION_MAX_RETRIES` | 3 | 单轮最大重试次数 |
-
-- 手势方式：仅 `adb shell input swipe` 直线滑动（贝塞尔曲线 / sendevent 已禁用）
-- 抗风控：随机采样
-- 依赖：`collector_phone_android.vision.template_matcher`（lazy import）

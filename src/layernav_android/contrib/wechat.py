@@ -1,14 +1,7 @@
-"""WeChat 4-layer model for group screenshot collection.
+"""WeChat 4-layer model — skeleton with cold-start support.
 
-Requires ``pip install layernav_android[wechat]`` and an existing vision backend
-(typically ``collector_phone_android.vision.template_matcher``).
-
-.. code-block:: python
-
-    from layernav_android.contrib.wechat import WeChatGroupLayerModel
-
-    model = WeChatGroupLayerModel()
-    model.restore(adb, "L1", scale_w)
+``detect()`` is currently a stub; wire your own vision backend to implement
+actual screenshot-based layer classification.
 """
 
 from __future__ import annotations
@@ -54,6 +47,11 @@ class WeChatGroupLayerModel(BaseLayerModel):
         L1 → chat_list / contacts / discover / profile  (4-tab switch via tap)
         L2 → group_chat / personal_chat                 (verify via detect_detail)
         L3 → wechat_note                                (verify via detect_detail)
+
+    .. note::
+
+        ``detect()`` is a stub; subclass and override with your own
+        screenshot-based vision backend.
     """
 
     layers = [
@@ -76,67 +74,17 @@ class WeChatGroupLayerModel(BaseLayerModel):
     def init(self, adb: AdbProtocol) -> None:
         self._device_id: str = getattr(adb, "_serial", "unknown")
 
-    def _ensure_vision(self):
-        try:
-            from collector_phone_android.vision.template_matcher import (
-                detect_wechat_main_bottom_tab_bar_four_columns,
-                detect_wechat_note_header,
-                is_wechat_main_conversation_list_chrome,
-            )
-            return (
-                detect_wechat_note_header,
-                is_wechat_main_conversation_list_chrome,
-                detect_wechat_main_bottom_tab_bar_four_columns,
-            )
-        except ImportError:
-            raise ImportError(
-                "WeChatGroupLayerModel.detect() requires "
-                "collector_phone_android.vision.template_matcher. "
-                "Install with: pip install collector_phone_android"
-            )
-
     # ── detect ────────────────────────────────────────────────────────────────
 
     def detect(self, adb: AdbProtocol, scale_w: float) -> str:
+        """Stub — override with your own screenshot-based layer classifier."""
         fg = adb.foreground_package()
         if fg != WECHAT_PACKAGE:
             return "L0"
-        (
-            detect_wechat_note_header,
-            is_wechat_main_conversation_list_chrome,
-            detect_wechat_main_bottom_tab_bar_four_columns,
-        ) = self._ensure_vision()
-        png = adb.screencap()
-        arr = _decode_png(png)
-        if detect_wechat_note_header(arr, scale_w) is not None:
-            return "L3"
-        if is_wechat_main_conversation_list_chrome(
-            arr, scale_w, require_visible_pinned_row=False,
-        ):
-            return "L1"
-        if detect_wechat_main_bottom_tab_bar_four_columns(arr, scale_w):
-            return "L1"
-        return "L2"
-
-    def detect_from_png(self, png: bytes, scale_w: float, fg: str) -> str:
-        """Detect from already-captured PNG (no extra screencap)."""
-        if fg != WECHAT_PACKAGE:
-            return "L0"
-        (
-            detect_wechat_note_header,
-            is_wechat_main_conversation_list_chrome,
-            detect_wechat_main_bottom_tab_bar_four_columns,
-        ) = self._ensure_vision()
-        arr = _decode_png(png)
-        if detect_wechat_note_header(arr, scale_w) is not None:
-            return "L3"
-        if is_wechat_main_conversation_list_chrome(
-            arr, scale_w, require_visible_pinned_row=False,
-        ):
-            return "L1"
-        if detect_wechat_main_bottom_tab_bar_four_columns(arr, scale_w):
-            return "L1"
-        return "L2"
+        raise NotImplementedError(
+            "WeChatGroupLayerModel.detect() is a stub. "
+            "Override with your own vision backend."
+        )
 
     # ── Layer handlers ────────────────────────────────────────────────────────
 
