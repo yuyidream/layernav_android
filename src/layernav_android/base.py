@@ -7,7 +7,8 @@ Framework—Task contract:
         - ``_on_Lx`` — per-layer handler (business logic + tap)
 
 Framework provides:
-    Atomic:   ``detect``  ``enter_next``  ``back_one``  ``back_recover``
+    Atomic:   ``detect``  ``enter_next``  ``back_one``  ``home_one``  ``back_recover``
+             ``poll_until_target_layer``  (adaptive-poll after caller tap)
     Combined: ``back``    ``advance``     ``restore``
 """
 
@@ -29,6 +30,22 @@ KEYCODE_HOME = 3
 _ENTER_NEXT_POLL_INITIAL = 0.3
 _ENTER_NEXT_POLL_STEP   = 0.3
 _ENTER_NEXT_POLL_MAX    = 2.0
+
+_HOME_SETTLE_S = 0.8
+
+
+def home_one(adb: AdbProtocol) -> None:
+    """Standalone: press HOME key and wait for launcher to settle.
+
+    A thin wrapper around ``adb.key_event(KEYCODE_HOME)`` + 0.8s settle.
+    Intended for cold-start preambles where no layer model instance exists
+    (e.g. task scheduler's ``start_app``).  For in‑navigation HOME use
+    :meth:`BaseLayerModel.home_one` which additionally detects and notifies
+    layer transitions.
+    """
+    adb.key_event(KEYCODE_HOME)
+    time.sleep(_HOME_SETTLE_S)
+
 
 # ── Layer definition ──────────────────────────────────────────────────────────
 
@@ -235,6 +252,44 @@ class BaseLayerModel:
 
     # ── Atomic API ────────────────────────────────────────────────────────────
 
+    def poll_until_target_layer(
+        self,
+        adb: AdbProtocol,
+        target_layer: str,
+        scale_w: float,
+        *,
+        max_wait_s: float = 8.0,
+    ) -> bool:
+        """Adaptive poll: detect → sleep → detect until *target_layer* is reached.
+
+        Caller performs a tap (or any navigation action) **before** calling
+        this method, then polls here for the target layer transition.
+
+        Same 0.3s→2.0s adaptive engine as :meth:`enter_next`.
+        Does **not** fire listener notifications — callers that need them
+        (e.g. :meth:`enter_next`) handle that separately.
+        """
+        cur = self.detect(adb, scale_w)
+        if cur == target_layer:
+            return True
+        poll_start = time.monotonic()
+        deadline = poll_start + max_wait_s
+        interval = _ENTER_NEXT_POLL_INITIAL
+        while time.monotonic() < deadline:
+            time.sleep(interval)
+            next_cur = self.detect(adb, scale_w)
+            if next_cur == target_layer:
+                return True
+            interval = min(interval + _ENTER_NEXT_POLL_STEP, _ENTER_NEXT_POLL_MAX)
+
+        elapsed = time.monotonic() - poll_start
+        current = self.detect(adb, scale_w)
+        LOG.warning(
+            "poll_until_target_layer: %s→%s timeout after %.1fs (still on %s)",
+            cur, target_layer, elapsed, current,
+        )
+        return False
+
     def enter_next(
         self,
         adb: AdbProtocol,
@@ -262,24 +317,14 @@ class BaseLayerModel:
         if target is None or target == cur:
             return True
 
-        poll_start = time.monotonic()
-        deadline = poll_start + max_wait_s
-        interval = _ENTER_NEXT_POLL_INITIAL
-        while time.monotonic() < deadline:
-            time.sleep(interval)
-            next_cur = self.detect(adb, scale_w)
-            if next_cur == target:
-                self._notify_transition(cur, next_cur, "enter_next")
-                return True
-            interval = min(interval + _ENTER_NEXT_POLL_STEP, _ENTER_NEXT_POLL_MAX)
-
-        elapsed = time.monotonic() - poll_start
-        LOG.warning(
-            "enter_next: %s→%s timeout after %.1fs (still on %s)",
-            cur, target, elapsed, self.detect(adb, scale_w),
+        ok = self.poll_until_target_layer(
+            adb, target, scale_w, max_wait_s=max_wait_s,
         )
-        self._notify_timeout(cur, target, elapsed)
-        return False
+        if ok:
+            self._notify_transition(cur, target, "enter_next")
+        else:
+            self._notify_timeout(cur, target, max_wait_s)
+        return ok
 
     def back_one(self, adb: AdbProtocol, scale_w: float) -> str:
         """Send KEYCODE_BACK once, return new layer.
@@ -297,6 +342,23 @@ class BaseLayerModel:
         self._notify_transition(cur, next_cur, "back_one")
         return next_cur
 
+    def home_one(
+        self, adb: AdbProtocol, scale_w: float,
+    ) -> str | None:
+        """Press HOME key once, detect layer transition.
+
+        Returns the *new* layer after returning to launcher home screen.
+        Intended for cold-start preambles and navigation-stack reset.
+        """
+        cur = self.detect(adb, scale_w)
+        LOG.debug("home_one: from %s", cur)
+        adb.key_event(KEYCODE_HOME)
+        time.sleep(0.8)
+        next_cur = self.detect(adb, scale_w)
+        LOG.debug("home_one: %s → %s", cur, next_cur)
+        self._notify_transition(cur, next_cur, "home_one")
+        return next_cur
+
     def back_recover(
         self,
         adb: AdbProtocol,
@@ -312,8 +374,7 @@ class BaseLayerModel:
         """
         LOG.warning("back_recover: cold-start → fast-forward → %s (page=%s)",
                      target_layer, target_page)
-        adb.key_event(KEYCODE_HOME)
-        time.sleep(0.8)
+        self.home_one(adb, scale_w)
         self._cold_start(adb, "L1", scale_w)
 
         ok = self.advance(adb, target_layer, scale_w, quick=True)

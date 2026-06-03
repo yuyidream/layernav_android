@@ -136,6 +136,26 @@ class TestBackOne:
         assert lst.transitions[0] == ("L2", "L1", "back_one")
 
 
+class TestHomeOne:
+    def test_home_one_sends_keyevent_and_returns_new_layer(self):
+        m = _TestModel()
+        adb = MockAdb()
+        m._detect_returns = ["L2", "L0"]
+        result = m.home_one(adb, 1.0)
+        assert adb._events == [KEYCODE_HOME]
+        assert result == "L0"
+
+    def test_home_one_notifies_listener(self):
+        m = _TestModel()
+        lst = _RecordListener()
+        m.add_listener(lst)
+        adb = MockAdb()
+        m._detect_returns = ["L2", "L0"]
+        m.home_one(adb, 1.0)
+        assert len(lst.transitions) == 1
+        assert lst.transitions[0] == ("L2", "L0", "home_one")
+
+
 class TestEnterNext:
     def test_enter_next_calls_handler_and_verifies(self):
         m = _TestModel()

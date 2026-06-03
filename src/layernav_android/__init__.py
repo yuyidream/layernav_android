@@ -6,6 +6,7 @@ from layernav_android.base import (
     KEYCODE_HOME,
     LayerDef,
     LayerListener,
+    home_one,
 )
 from layernav_android.cold_start import (
     APP_DEFAULTS,
@@ -20,6 +21,7 @@ __all__ = [
     "cold_start_app_from_launcher",
     "DetectResult",
     "dock_app_icon_coords",
+    "home_one",
     "KEYCODE_BACK",
     "KEYCODE_HOME",
     "LayerDef",

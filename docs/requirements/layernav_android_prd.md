@@ -87,7 +87,7 @@ def _on_L1(self, adb, scale_w, *, quick=False) -> str | None:
 
 ---
 
-## §4. 框架 API —— 4 个原子操作
+## §4. 框架 API —— 6 个原子操作
 
 ### §4.1 `detect(adb, scale_w) → str`
 
@@ -133,7 +133,43 @@ back_one():
 
 ---
 
-### §4.4 `back_recover(adb, target_layer, scale_w) → bool`
+### §4.5 `home_one(adb, scale_w) → str | None`
+
+**从当前层级按 HOME 键回到手机主屏幕**（单步 KEYCODE_HOME）。
+
+```
+home_one():
+    1. cur = detect()              ← ★ 先检查当前层级
+    2. KEYCODE_HOME
+    3. sleep(0.8)
+    4. next = detect()             ← ★ HOME 后检查所在层级
+    5. return next
+```
+
+返回 HOME 后所在的层级 key。**OOP 版本**（挂在 `BaseLayerModel` 上，触发 listener 通知）。
+
+另有 **模块级函数** `layernav_android.home_one(adb)` — 仅执行 `key_event(KEYCODE_HOME) + sleep(0.8)`，不检测层级，用于无 model 实例的启动保活场景（如 `app_operations/start_app`）。
+
+---
+
+### §4.6 `poll_until_target_layer(adb, target_layer, scale_w, *, max_wait_s=8.0) → bool`
+
+**自适应轮询检测目标层级**。调用方先执行 tap，再调用本方法等待目标层出现。
+
+```
+poll_until_target_layer(target_layer):
+    1. cur = detect()
+    2. if cur == target_layer → return True              ← 已在目标层，直接成功
+    3. 轮询 detect()，间隔 0.3s→0.6s→…→2.0s，最长 max_wait_s
+    4. 命中 → return True
+    5. 超时 → return False
+```
+
+与 `enter_next` 复用同一个自适应轮询引擎（0.3s 初始，步长 0.3s，上限 2.0s）。**不触发 listener 通知** — 通知职责由调用方（如 `enter_next`）自行处理。
+
+---
+
+### §4.7 `back_recover(adb, target_layer, scale_w) → bool`
 
 **BACK 失败后恢复**：回到手机主屏幕 → 恢复到 BACK 的目标层级。
 
@@ -235,10 +271,13 @@ L3 → back("L2") → back_one 失灵 → L0
 | `_on_Lx()` | 按层索引调用 | 覆盖：业务 + 点击 |
 | `enter_next()` | 调 handler + 校验 | — |
 | `back_one()` | KEYCODE_BACK + detect | — |
+| `home_one()` | KEYCODE_HOME + detect | — |
+| `poll_until_target_layer()` | 自适应轮询检测目标层 | — |
 | `back_recover()` | 冷启动 + 快速前进 + 正常恢复 | — |
 | `back()` | 循环 back_one + back_recover | — |
 | `advance()` | 循环 enter_next | — |
 | `restore()` | 方向判断 + 调 back/advance | — |
+| `home_one(adb)` | 模块级函数 — KEYCODE_HOME + sleep | — |
 | 点击动作 | — | handler 内 `adb.tap()` |
 
 ### §7.1 有限状态与无限状态的分离（借鉴 Automat）
@@ -289,6 +328,7 @@ class LayerListener(Protocol):
 | `on_transition(cur, next, "enter_next")` | `enter_next` | 轮询验证通过，确认到达目标层 |
 | `on_timeout(cur, target, elapsed)` | `enter_next` | 轮询超时，未到达目标层 |
 | `on_transition(cur, next, "back_one")` | `back_one` | KEYCODE_BACK 后检测到层变更 |
+| `on_transition(cur, next, "home_one")` | `home_one` | KEYCODE_HOME 后检测到层变更 |
 | `on_recovery(target, ok)` | `back_recover` | 恢复流程结束后（ok=True 成功 / ok=False 失败） |
 
 ### §8.4 使用示例

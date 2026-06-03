@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 
 from layernav_android._protocol import AdbProtocol
-from layernav_android.base import KEYCODE_BACK, KEYCODE_HOME, BaseLayerModel, LayerDef
+from layernav_android.base import KEYCODE_BACK, BaseLayerModel, LayerDef
 from layernav_android.cold_start import cold_start_app_from_launcher
 
 LOG = logging.getLogger("layernav.wechat")
@@ -161,8 +161,7 @@ class WeChatGroupLayerModel(BaseLayerModel):
 
         tab_x, tab_y = _calc_wechat_session_tab(w, h, scale_w)
 
-        adb.key_event(KEYCODE_HOME)
-        time.sleep(0.8)
+        self.home_one(adb, scale_w)
 
         cold_start_app_from_launcher(
             adb, WECHAT_PACKAGE,
