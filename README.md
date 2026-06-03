@@ -281,46 +281,17 @@ ok = cold_start_app_from_launcher(
 
 > ⚠️ 重启耗时 60–120 s，且要求设备无需手动解锁（无 PIN/图案锁）。适用于无人值守的 7×24 自动化。
 
----
 
-## 六、微信主界面会话列表归位
+## 六、适用场景
 
-> **v0.5** 起迁移至 [mum](https://github.com/yuyidream/mum) 仓库 ``android/wechat/reposition.py``。本文档保留归档参考。
 
-`mum.android.wechat.reposition` 提供 `reposition_wechat_to_list_top`，实现从任意 WeChat 状态 → 归位到会话列表顶端的完整流程：
-
-```python
-from mum.android.wechat.reposition import reposition_wechat_to_list_top, RepositionResult
-
-result = reposition_wechat_to_list_top(
-    adb, scale_w=1.0, screen_w=1080, screen_h=2248,
-    deadline_s=60.0,
-    require_visible_pinned_row=False,
-)
-print(f"归位: {'OK' if result.ok else 'FAIL'} ({result.reason})")
-print(f"  swipes: {result.swipes_used}  early_stop: {result.early_stop_triggered}")
-```
-
-**向后兼容**：``layernav_android.contrib.wechat`` 仍可导入，内部重导出自 mum。
-
-**手势参数**（三设备统一，真机 10 轮验证 100%）：`from ∈ [13%, 25%]` 随机 + `L ∈ [30%, 42%]` 随机 → `to = min(99%, from+L)`。
-
-**重试策略**：失败后同范围重新采样最多 3 次；连续 2 次失败后 dHash 交叉校验信号可信度；3 次仍失败则冷启动兜底。
-
-**手势方式**：仅使用 `AdbProtocol.swipe()` 直线滑动（`adb shell input swipe`），贝塞尔曲线 / `sendevent` / `input motionevent` 已禁用（D1 Android 10 实测不产生触摸效果）。抗风控通过随机 `from` / `L` 采样实现。
-
----
-
-## 七、适用场景
-
-- **APP 合规数据采集** — 内容抓取、列表遍历、批量浏览
-- **移动端 RPA 自动化** — 账号矩阵、批量操作、运营工具
+- **移动端 RPA 自动化** — 加速开发
 - **Android UI 自动化测试** — 提升脚本稳定性，减少维护成本
 - **APP 流程逆向 / 行为模拟** — 稳定进入深层页面
 
 ---
 
-## 八、优势对比
+## 七、优势对比
 
 | 能力 | 本框架 | Appium / uiautomator2 / Airtest |
 |------|--------|---------------------------------|
@@ -334,16 +305,15 @@ print(f"  swipes: {result.swipes_used}  early_stop: {result.early_stop_triggered
 
 ---
 
-## 九、拓展建议
+## 八、拓展建议
 
 - **页面检测能力**：可接入 PaddleOCR / EasyOCR / OpenCV 图像匹配
-- **ADB 加固**：对接自定义风控 ADB 客户端，模拟真人操作轨迹
 - **状态机拓展**：可结合 `python-statemachine` 优化状态管理（本框架的 `LayerListener` 即借鉴其设计）
 - **多设备并行**：每设备独立 `BaseLayerModel` 实例即可天然支持多设备
 
 ---
 
-## 十、目录结构
+## 九、目录结构
 
 ```
 layernav_android/
