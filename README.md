@@ -285,12 +285,12 @@ ok = cold_start_app_from_launcher(
 
 ## 六、微信主界面会话列表归位
 
-`layernav_android.contrib.wechat` 提供 `reposition_wechat_to_list_top`，实现从任意 WeChat 状态 → 归位到会话列表顶端的完整流程：
+> **v0.5** 起迁移至 [mum](https://github.com/yuyidream/mum) 仓库 ``android/wechat/reposition.py``。本文档保留归档参考。
+
+`mum.android.wechat.reposition` 提供 `reposition_wechat_to_list_top`，实现从任意 WeChat 状态 → 归位到会话列表顶端的完整流程：
 
 ```python
-from layernav_android.contrib.wechat import (
-    reposition_wechat_to_list_top, RepositionResult, _REPOSITION_FROM_LO,
-)
+from mum.android.wechat.reposition import reposition_wechat_to_list_top, RepositionResult
 
 result = reposition_wechat_to_list_top(
     adb, scale_w=1.0, screen_w=1080, screen_h=2248,
@@ -300,6 +300,8 @@ result = reposition_wechat_to_list_top(
 print(f"归位: {'OK' if result.ok else 'FAIL'} ({result.reason})")
 print(f"  swipes: {result.swipes_used}  early_stop: {result.early_stop_triggered}")
 ```
+
+**向后兼容**：``layernav_android.contrib.wechat`` 仍可导入，内部重导出自 mum。
 
 **手势参数**（三设备统一，真机 10 轮验证 100%）：`from ∈ [13%, 25%]` 随机 + `L ∈ [30%, 42%]` 随机 → `to = min(99%, from+L)`。
 
