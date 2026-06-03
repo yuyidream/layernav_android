@@ -444,16 +444,16 @@ cold_start_app_from_launcher(
 
 ## §10. 微信主界面会话列表归位 —— `reposition_wechat_to_list_top`
 
-> **状态**：已迁移至 `mum.android.wechat.reposition`（v0.5）。本节内容保留归档参考，实际实现见 mum 仓库。
+> **状态**：已迁移至 `mum.android.wechat.reposition`（v0.1+）。本节内容保留归档参考，实际实现见 mum 仓库。
 
 ### §10.1 设计动机
 
-微信采集自动化中，需要在进入群聊前将微信前台归位到**主界面会话列表最顶端**。此操作包含导航（L2/L0→L1）和锚点下拉（触发「最近」页面），是从 `collector_phone_android` 抽取到框架层的完整归位功能。
+微信采集自动化中，需要在进入群聊前将微信前台归位到**主界面会话列表最顶端**。此操作包含导航（L2/L0→L1）和锚点下拉（触发「最近」页面），是从 `collector_phone_android` 抽取的完整归位功能。
 
 ### §10.2 函数签名
 
 ```python
-from layernav_android.contrib.wechat import (
+from mum.android.wechat.reposition import (
     reposition_wechat_to_list_top, RepositionResult,
 )
 
