@@ -216,7 +216,7 @@ model.back(adb, to_layer="L1", scale_w=1.0, target_page="search")
 | `detect_detail(adb, scale_w) → DetectResult` | 检测层级 + 子页面名称（v0.3.0，默认调用 `detect` + `LayerDef.page_name`） |
 | `enter_next(adb, scale_w, *, quick, max_wait_s) → bool` | 单步进入下一层 ← guard + validator + 轮询 |
 | `back_one(adb, scale_w) → str` | 单步 `KEYCODE_BACK`，返回新层级 |
-| `back_recover(adb, target, scale_w, *, target_page=None) → bool` | 故障恢复：HOME → 冷启动 → 快速前进 → 子页面**（v0.3.0: 支持 `target_page`）** |
+| `back_recover(adb, target, scale_w, *, target_page=None) → bool` | 故障恢复：HOME → 冷启动 → 快速前进 → 子页面。v0.4.3: 冷启动 3 次重试 + `adb reboot` 兜底；支持 `target_page`**（v0.4.3: 重启安卓系统作为终极兜底）** |
 
 **组合操作**
 

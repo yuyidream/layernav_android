@@ -152,8 +152,11 @@ class WeChatGroupLayerModel(BaseLayerModel):
         target_layer: str,
         scale_w: float,
         deadline_s: float = 20.0,
+        *,
+        allow_reboot: bool = False,
     ) -> None:
-        LOG.info("_cold_start: HOME → WeChat → poll %s", target_layer)
+        LOG.info("_cold_start: HOME → WeChat → poll %s (allow_reboot=%s)",
+                 target_layer, allow_reboot)
 
         png = adb.screencap()
         arr = _decode_png(png)
@@ -169,6 +172,7 @@ class WeChatGroupLayerModel(BaseLayerModel):
             session_tab_x=tab_x, session_tab_y=tab_y,
             force_stop_before=True,
             deadline_s=deadline_s,
+            allow_reboot=allow_reboot,
         )
 
         deadline = time.monotonic() + deadline_s

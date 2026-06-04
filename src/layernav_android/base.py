@@ -245,7 +245,8 @@ class BaseLayerModel:
         pass
 
     def _cold_start(
-        self, adb: AdbProtocol, target_layer: str, scale_w: float
+        self, adb: AdbProtocol, target_layer: str, scale_w: float,
+        *, allow_reboot: bool = False,
     ) -> None:
         """Cold-start the target app (override in subclass)."""
         pass
@@ -369,13 +370,54 @@ class BaseLayerModel:
     ) -> bool:
         """Recover after BACK exhaustion: cold-start → fast-forward → page.
 
-        If *target_page* is given, calls :meth:`_recover_to_page` after
-        reaching *target_layer*.
+        Cold-start is retried up to 3 times; if all fail, one final
+        attempt is made with ``allow_reboot=True`` (``adb reboot`` +
+        wait‑for‑boot + cold‑start).  If *target_page* is given, calls
+        :meth:`_recover_to_page` after reaching *target_layer*.
         """
         LOG.warning("back_recover: cold-start → fast-forward → %s (page=%s)",
                      target_layer, target_page)
         self.home_one(adb, scale_w)
-        self._cold_start(adb, "L1", scale_w)
+
+        # ── cold-start with retries (3× normal, 1× reboot) ──
+        for attempt in range(1, 5):  # 1,2,3 normal; 4 = reboot
+            try:
+                if attempt < 4:
+                    self._cold_start(adb, "L1", scale_w)
+                else:
+                    LOG.error("back_recover: 3 attempts failed — rebooting device")
+                    self.home_one(adb, scale_w)
+                    self._cold_start(adb, "L1", scale_w, allow_reboot=True)
+                break  # success — exit retry loop
+            except TimeoutError:
+                if attempt < 3:
+                    LOG.warning(
+                        "back_recover: cold-start attempt %d/3 timed out "
+                        "— retrying", attempt,
+                    )
+                    self.home_one(adb, scale_w)
+                elif attempt == 3:
+                    continue  # → reboot attempt
+                else:
+                    LOG.error("back_recover: cold-start timed out after reboot")
+                    self._notify_recovery(target_layer, False)
+                    return False
+            except Exception:
+                if attempt < 3:
+                    LOG.warning(
+                        "back_recover: cold-start attempt %d/3 exception "
+                        "— retrying", attempt, exc_info=True,
+                    )
+                    self.home_one(adb, scale_w)
+                elif attempt == 3:
+                    continue  # → reboot attempt
+                else:
+                    LOG.error(
+                        "back_recover: cold-start exception after reboot",
+                        exc_info=True,
+                    )
+                    self._notify_recovery(target_layer, False)
+                    return False
 
         ok = self.advance(adb, target_layer, scale_w, quick=True)
         if not ok:

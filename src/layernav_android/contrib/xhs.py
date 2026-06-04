@@ -45,7 +45,10 @@ class XhsLayerModel(BaseLayerModel):
     def _on_L3(self, adb: AdbProtocol, scale_w: float, *, quick: bool = False) -> str | None:
         return None
 
-    def _cold_start(self, adb: AdbProtocol, target_layer: str, scale_w: float) -> None:
+    def _cold_start(
+        self, adb: AdbProtocol, target_layer: str, scale_w: float,
+        *, allow_reboot: bool = False,
+    ) -> None:
         self.home_one(adb, scale_w)
 
         png = adb.screencap()
@@ -59,6 +62,7 @@ class XhsLayerModel(BaseLayerModel):
             app_name="xhs", M=4, N=1,
             force_stop_before=True,
             deadline_s=20.0,
+            allow_reboot=allow_reboot,
         )
 
         deadline = time.monotonic() + 20.0

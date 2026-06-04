@@ -169,17 +169,29 @@ poll_until_target_layer(target_layer):
 
 ---
 
-### §4.7 `back_recover(adb, target_layer, scale_w) → bool`
+### §4.7 `back_recover(adb, target_layer, scale_w, *, target_page=None) → bool`
 
-**BACK 失败后恢复**：回到手机主屏幕 → 恢复到 BACK 的目标层级。
+**BACK 失败后恢复**：回到手机主屏幕 → 恢复到 BACK 的目标层级（v0.4.3: 冷启动 3 次重试 + `adb reboot` 兜底）。
 
 ```
 back_recover(target_layer):
-    1. KEYCODE_HOME → 冷启动到 L1（子类覆盖 _cold_start）  ← 冷启动
+    1. KEYCODE_HOME → 冷启动到 L1（子类覆盖 _cold_start）
+       ├─ 尝试 1: _cold_start(L1) — 失败 → HOME 重试
+       ├─ 尝试 2: _cold_start(L1) — 失败 → HOME 重试
+       ├─ 尝试 3: _cold_start(L1) — 失败 → HOME 进入 reboot 路径
+       └─ 尝试 4: _cold_start(L1, allow_reboot=True) — 失败 → return False
     2. 循环 enter_next(quick=True) 直到 target_layer  ← 快速穿过中间层
     3. _on_L[target_layer](quick=False)                 ← 正常恢复业务（advance 内部完成）
     4. return detect() == target_layer
 ```
+
+| 参数 | 说明 | v0.4.3 新增 |
+|------|------|------------|
+| 冷启动重试 | 3 次常规重试 + 1 次 `adb reboot` 兜底 | ✅ |
+| `_cold_start` 签名 | 新增 `*, allow_reboot: bool = False` 参数 | ✅ |
+| `target_page` | 同 v0.3.0，恢复后自动定位到子页面 | — |
+
+`allow_reboot=True` 时，`cold_start_app_from_launcher` 在 monkey / am start / Dock icon 三条路径全部失败后，执行 `adb reboot` → `_wait_for_boot_completed` → 重新 monkey 启动。重启耗时 60–120s，要求设备无锁屏。
 
 ---
 
