@@ -236,9 +236,20 @@ class WeChatGroupLayerModel(BaseLayerModel):
             tab_idx = self._TAB_INDEX_MAP[page_name]
             tab_x = tab_width // 2 + tab_idx * tab_width
 
-            LOG.info("_recover_to_page: L1 → %s tap (%d, %d)", page_name, tab_x, tab_y)
-            adb.tap(tab_x, tab_y)
-            time.sleep(0.5)
-            return self.detect_detail(adb, scale_w).page_name == page_name
+            for attempt in range(3):
+                LOG.info("_recover_to_page: L1 → %s tap (%d, %d) attempt=%d/3",
+                         page_name, tab_x, tab_y, attempt + 1)
+                adb.tap(tab_x, tab_y)
+                time.sleep(0.55)
+                result = self.detect_detail(adb, scale_w)
+                if result.page_name == page_name:
+                    return True
+                if attempt < 2:
+                    LOG.info("_recover_to_page: page=%s (expected=%s), retrying",
+                             result.page_name, page_name)
+
+            LOG.warning("_recover_to_page: 3 attempts exhausted, page=%s",
+                        result.page_name)
+            return False
 
         return super()._recover_to_page(layer, page_name, adb, scale_w)
