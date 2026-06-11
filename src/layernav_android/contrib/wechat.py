@@ -117,7 +117,7 @@ class WeChatGroupLayerModel(BaseLayerModel):
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
-    def _tap_row(self, row: Any, adb: AdbProtocol) -> None:
+    def _tap_row(self, row: Any, adb: AdbProtocol) -> tuple[int, int]:
         x1, y1, x2, y2 = row.bbox
         if getattr(row, "unread_dots", None):
             badge = row.unread_dots[0]
@@ -131,6 +131,7 @@ class WeChatGroupLayerModel(BaseLayerModel):
             cx = (x1 + x2) // 2
             cy = (y1 + y2) // 2
         adb.tap(cx, cy)
+        return cx, cy
 
     def _pick_first_unread(self, adb: AdbProtocol, scale_w: float) -> Any:
         return None  # TODO: wire real scan from driver
