@@ -314,6 +314,9 @@ class BaseLayerModel:
         *max_wait_s*.
         """
         cur = self.detect(adb, scale_w)
+        if self._layer_index(cur) < 0:
+            LOG.error("enter_next: unknown layer %s, cannot advance", cur)
+            return False
         target = self._call_on_layer(cur, adb, scale_w, quick=quick)
         if target is None or target == cur:
             return True
@@ -475,6 +478,13 @@ class BaseLayerModel:
             if cur == target_layer:
                 self._call_on_layer(target_layer, adb, scale_w, quick=False)
                 return True
+            if self._layer_index(cur) < 0:
+                LOG.warning(
+                    "advance: unknown layer %s, cold-starting → %s",
+                    cur, target_layer,
+                )
+                self._cold_start(adb, target_layer, scale_w)
+                continue
             ok = self.enter_next(adb, scale_w, quick=quick, max_wait_s=max_wait_s)
             if not ok:
                 return False
