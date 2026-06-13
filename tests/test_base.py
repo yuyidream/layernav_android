@@ -54,12 +54,15 @@ class _TestModel(BaseLayerModel):
 
     def __init__(self) -> None:
         super().__init__()
-        self._detect_returns: list[str] = ["L0"]
+        self._detect_returns: list[str | None] = ["L0"]
 
-    def detect(self, adb, scale_w) -> str:
+    def detect(self, adb, scale_w) -> str | None:
         if self._detect_returns:
             return self._detect_returns.pop(0)
         return "L0"
+
+    def detect_layer(self, adb, scale_w, layer) -> bool:
+        return self.detect(adb, scale_w) == layer
 
     def _on_L0(self, adb, scale_w, *, quick=False) -> str | None:
         return "L1"
@@ -160,7 +163,7 @@ class TestEnterNext:
     def test_enter_next_calls_handler_and_verifies(self):
         m = _TestModel()
         adb = MockAdb()
-        m._detect_returns = ["L0", "L1"]
+        m._detect_returns = ["L0", "L1", "L1"]  # +1 for detect_layer in poll
         ok = m.enter_next(adb, 1.0)
         assert ok is True
 
@@ -204,7 +207,7 @@ class TestEnterNext:
         lst = _RecordListener()
         m.add_listener(lst)
         adb = MockAdb()
-        m._detect_returns = ["L0", "L1"]
+        m._detect_returns = ["L0", "L1", "L1"]  # +1 for detect_layer in poll
         m.enter_next(adb, 1.0)
         assert len(lst.transitions) == 1
         assert lst.transitions[0] == ("L0", "L1", "enter_next")
@@ -230,17 +233,48 @@ class TestBack:
     def test_back_stops_when_at_target(self):
         m = _TestModel()
         adb = MockAdb()
-        m._detect_returns = ["L1"]
+        m._detect_returns = ["L1", "L1"]  # detect() + detect_layer peek
         ok = m.back(adb, "L1", 1.0)
         assert ok is True
 
-    def test_back_uses_back_one_then_stops(self):
+    def test_back_triggers_recover_when_not_at_target(self):
         m = _TestModel()
         adb = MockAdb()
-        m._detect_returns = ["L3", "L2", "L1", "L1"]
+
+        def _cold_start(adb, target, scale):
+            m._detect_returns = ["L1", "L1", "L1", "L1"]
+
+        m._cold_start = _cold_start
+        m._detect_returns = [
+            "L2",  # back → detect()
+            "L2",  # back → detect_layer("L1") peek → "L2" != "L1" → False
+            # ── back_recover ──
+            "L1",  # home_one post-detect → _cold_start replaces
+            "L1",  # advance → detect_layer("L1") peek
+            "L1",  # advance → detect_layer("L1") (call handler)
+            "L1",  # back_recover final detect_layer("L1")
+        ]
         ok = m.back(adb, "L1", 1.0)
         assert ok is True
-        assert adb._events == [KEYCODE_BACK]
+
+    def test_back_falls_to_recover_when_detect_none(self):
+        m = _TestModel()
+        adb = MockAdb()
+
+        def _cold_start(adb, target, scale):
+            m._detect_returns = ["L1", "L1", "L1", "L1"]
+
+        m._cold_start = _cold_start
+        m._detect_returns = [
+            None,    # back → detect() → None → back_recover
+            # ── back_recover ──
+            "L1",    # home_one post-detect → _cold_start replaces
+            "L1",    # advance → detect_layer("L1") peek
+            "L1",    # advance → detect_layer("L1") call handler
+            "L1",    # back_recover final detect_layer("L1")
+        ]
+        ok = m.back(adb, "L1", 1.0)
+        assert ok is True
 
 
 class TestAdvance:
@@ -248,7 +282,7 @@ class TestAdvance:
         m = _TestModel()
         adb = MockAdb()
         m._detect_returns = [
-            "L1", "L1", "L2", "L2", "L2", "L3", "L3",
+            "L1", "L1", "L2", "L2", "L2", "L3", "L3", "L3",
         ]
         ok = m.advance(adb, "L3", 1.0)
         assert ok is True
@@ -262,7 +296,7 @@ class TestAdvance:
             calls.append(kwargs.get("quick"))
             return None
         m._on_L3 = _on_L3_track
-        m._detect_returns = ["L3"]
+        m._detect_returns = ["L3", "L3"]  # detect() + detect_layer peek
 
         m.advance(adb, "L3", 1.0, quick=True)
         assert calls == [False]
@@ -287,14 +321,18 @@ class TestRestore:
     def test_restore_advances_when_below(self):
         m = _TestModel()
         adb = MockAdb()
-        m._detect_returns = ["L0", "L0", "L1", "L1", "L1", "L2", "L2"]
+        # restore: detect + detect_layer → 2
+        # advance: detect + detect_layer → 2  
+        # enter_next: detect → 1, poll: detect + detect_layer → 2
+        # advance loop2: detect + detect_layer → 2 = 9 total
+        m._detect_returns = ["L0", "L0", "L1", "L1", "L1", "L1", "L2", "L2", "L2"]
         ok = m.restore(adb, "L2", 1.0)
         assert ok is True
 
     def test_restore_returns_true_when_at_target(self):
         m = _TestModel()
         adb = MockAdb()
-        m._detect_returns = ["L2"]
+        m._detect_returns = ["L2", "L2"]  # detect() + detect_layer peek
         ok = m.restore(adb, "L2", 1.0)
         assert ok is True
 

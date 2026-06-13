@@ -178,7 +178,7 @@ class WeChatGroupLayerModel(BaseLayerModel):
 
         deadline = time.monotonic() + deadline_s
         while time.monotonic() < deadline:
-            if self.detect(adb, scale_w) == target_layer:
+            if self.detect_layer(adb, scale_w, target_layer):
                 LOG.info("_cold_start: reached %s", target_layer)
                 return
             time.sleep(1.0)

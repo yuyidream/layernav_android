@@ -7,7 +7,7 @@ Framework—Task contract:
         - ``_on_Lx`` — per-layer handler (business logic + tap)
 
 Framework provides:
-    Atomic:   ``detect``  ``enter_next``  ``back_one``  ``home_one``  ``back_recover``
+    Atomic:   ``detect``  ``detect_layer``  ``enter_next``  ``back_one``  ``home_one``  ``back_recover``
              ``poll_until_target_layer``  (adaptive-poll after caller tap)
     Combined: ``back``    ``advance``     ``restore``
 """
@@ -136,6 +136,7 @@ class BaseLayerModel:
     Subclass contract:
         - Override :attr:`layers`.
         - Override :meth:`detect`.
+        - Override :meth:`detect_layer`.
         - Override ``_on_L0`` / ``_on_L1`` / ``_on_L2`` / ``_on_L3``.
         - Optionally override :meth:`_cold_start`.
     """
@@ -168,9 +169,22 @@ class BaseLayerModel:
 
     # ── Subclass overrides ────────────────────────────────────────────────────
 
-    def detect(self, adb: AdbProtocol, scale_w: float) -> str:
-        """Return current layer key.  Task MUST override."""
+    def detect(self, adb: AdbProtocol, scale_w: float) -> str | None:
+        """Return current layer key.  Task MUST override.
+
+        Returns ``None`` when the layer cannot be determined — callers
+        should treat this as "unknown position" and initiate recovery.
+        """
         raise NotImplementedError("subclass must override detect()")
+
+    def detect_layer(self, adb: AdbProtocol, scale_w: float, layer: str) -> bool:
+        """Check if the current screen matches *layer* (target-aware detection).
+
+        Unlike :meth:`detect` ("where am I"), this answers "have I reached
+        *layer*?" — used by navigation methods to verify destination arrival.
+        Subclass MUST override.
+        """
+        raise NotImplementedError("subclass must override detect_layer()")
 
     def detect_detail(self, adb: AdbProtocol, scale_w: float) -> DetectResult:
         """Return current layer key + custom page_name.
@@ -271,15 +285,14 @@ class BaseLayerModel:
         (e.g. :meth:`enter_next`) handle that separately.
         """
         cur = self.detect(adb, scale_w)
-        if cur == target_layer:
+        if cur is not None and self.detect_layer(adb, scale_w, target_layer):
             return True
         poll_start = time.monotonic()
         deadline = poll_start + max_wait_s
         interval = _ENTER_NEXT_POLL_INITIAL
         while time.monotonic() < deadline:
             time.sleep(interval)
-            next_cur = self.detect(adb, scale_w)
-            if next_cur == target_layer:
+            if self.detect_layer(adb, scale_w, target_layer):
                 return True
             interval = min(interval + _ENTER_NEXT_POLL_STEP, _ENTER_NEXT_POLL_MAX)
 
@@ -439,7 +452,7 @@ class BaseLayerModel:
                 self._notify_recovery(target_layer, False)
                 return False
 
-        result = self.detect(adb, scale_w) == target_layer
+        result = self.detect_layer(adb, scale_w, target_layer)
         self._notify_recovery(target_layer, result)
         return result
 
@@ -449,17 +462,20 @@ class BaseLayerModel:
         self, adb: AdbProtocol, to_layer: str, scale_w: float, *,
         target_page: str | None = None,
     ) -> bool:
-        """Retreat to *to_layer* via repeated BACK."""
-        for _ in range(3):
-            cur = self.detect(adb, scale_w)
-            if cur == to_layer:
-                self._call_on_layer(to_layer, adb, scale_w, quick=False)
-                if target_page is not None:
-                    return self._recover_to_page(to_layer, target_page, adb, scale_w)
-                return True
-            if cur == "L0":
-                break
-            self.back_one(adb, scale_w)
+        """Retreat to *to_layer*, relying on :meth:`detect_layer` for arrival
+        confirmation.  If the current layer cannot be determined
+        (:meth:`detect` returns ``None``), falls through to
+        :meth:`back_recover` immediately.
+        """
+        cur = self.detect(adb, scale_w)
+        if cur is None:
+            LOG.warning("back: detect() returned None — falling back to back_recover")
+            return self.back_recover(adb, to_layer, scale_w, target_page=target_page)
+        if self.detect_layer(adb, scale_w, to_layer):
+            self._call_on_layer(to_layer, adb, scale_w, quick=False)
+            if target_page is not None:
+                return self._recover_to_page(to_layer, target_page, adb, scale_w)
+            return True
         return self.back_recover(adb, to_layer, scale_w, target_page=target_page)
 
     def advance(
@@ -475,7 +491,7 @@ class BaseLayerModel:
         """
         while True:
             cur = self.detect(adb, scale_w)
-            if cur == target_layer:
+            if cur is not None and self.detect_layer(adb, scale_w, target_layer):
                 self._call_on_layer(target_layer, adb, scale_w, quick=False)
                 return True
             if self._layer_index(cur) < 0:
@@ -497,9 +513,15 @@ class BaseLayerModel:
 
         If already on *target_layer* but page mismatch, calls
         :meth:`_recover_to_page` without cold-start.
+
+        If the current layer cannot be determined (:meth:`detect` returns
+        ``None``), falls through to :meth:`back_recover`.
         """
         cur = self.detect(adb, scale_w)
-        if cur == target_layer:
+        if cur is None:
+            LOG.warning("restore: detect() returned None — falling back to back_recover")
+            return self.back_recover(adb, target_layer, scale_w, target_page=target_page)
+        if self.detect_layer(adb, scale_w, target_layer):
             if target_page is not None:
                 return self._recover_to_page(target_layer, target_page, adb, scale_w)
             return True

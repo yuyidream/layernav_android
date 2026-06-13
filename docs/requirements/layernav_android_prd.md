@@ -53,9 +53,11 @@ class LayerDef:
 
 ## §3. Task 子类契约
 
-### §3.1 `detect(adb, scale_w) → str`
+### §3.1 `detect(adb, scale_w) → str | None`
 
 返回当前层级 key。**必须基于实时截屏**。
+
+无法判定时返回 `None` — 调用方应将其视为"未知位置"并触发恢复流程（`back_recover`）。
 
 ### §3.2 `_on_Lx(adb, scale_w, *, quick=False) → str | None`
 
@@ -85,13 +87,41 @@ def _on_L1(self, adb, scale_w, *, quick=False) -> str | None:
     return "L2"
 ```
 
+### §3.3 `detect_layer(adb, scale_w, layer) → bool`（v0.5.0）
+
+**目标感知检测**：回答"当前页面是否匹配指定的 *layer*？"与 `detect()`（"我在哪"）职责分离。导航 API 使用 `detect_layer` 验证目标到达。
+
+```python
+def detect_layer(self, adb, scale_w, layer: str) -> bool:
+    """Check if the current screen matches *layer*."""
+    screenshot = adb.screencap()
+    if layer == "L0":
+        return adb.foreground_package() != "com.tencent.mm"
+    if layer == "L3":
+        return detect_note_header(screenshot) is not None
+    if layer == "L2":
+        return detect_chat_chevron(screenshot) is not None
+    if layer == "L1":
+        # Subclass may add extra negation checks (e.g. reject L1 if L2 features present)
+        return is_main_chrome(screenshot)
+    return False
+```
+
+**设计意图**：`detect()` 与 `detect_layer()` 可以因检测精度差异而给出不同结果——`detect_layer(target)` 可加入额外的否定确认条件（如 L1 检测时临时排除 L2 特征），这些条件不影响 `detect()` 的"我在哪"语义。
+
 ---
 
-## §4. 框架 API —— 6 个原子操作
+## §4. 框架 API —— 5 个原子操作 + 1 个目标感知检测
 
-### §4.1 `detect(adb, scale_w) → str`
+### §4.1 `detect(adb, scale_w) → str | None`
 
-**查询当前所在层级**。Task 覆盖。
+**查询当前所在层级**。Task 覆盖。无法判定时返回 `None`。
+
+### §4.1b `detect_layer(adb, scale_w, layer) → bool`（v0.5.0）
+
+**目标感知检测**：当前屏幕是否匹配指定 *layer*。Task 覆盖。
+
+导航 API（`poll_until_target_layer / back_recover / advance / back / restore`）使用 `detect_layer` 验证目标到达，`detect()` 仅用于"我在哪"查询。
 
 ---
 
@@ -159,8 +189,8 @@ home_one():
 ```
 poll_until_target_layer(target_layer):
     1. cur = detect()
-    2. if cur == target_layer → return True              ← 已在目标层，直接成功
-    3. 轮询 detect()，间隔 0.3s→0.6s→…→2.0s，最长 max_wait_s
+    2. if cur is not None and detect_layer(target_layer) → return True     ← 已在目标层
+    3. 轮询 detect_layer(target_layer)，间隔 0.3s→0.6s→…→2.0s，最长 max_wait_s
     4. 命中 → return True
     5. 超时 → return False
 ```
@@ -182,7 +212,7 @@ back_recover(target_layer):
        └─ 尝试 4: _cold_start(L1, allow_reboot=True) — 失败 → return False
     2. 循环 enter_next(quick=True) 直到 target_layer  ← 快速穿过中间层
     3. _on_L[target_layer](quick=False)                 ← 正常恢复业务（advance 内部完成）
-    4. return detect() == target_layer
+    4. return detect_layer(target_layer)
 ```
 
 | 参数 | 说明 | v0.4.3 新增 |
@@ -205,15 +235,13 @@ back_recover(target_layer):
 
 ```
 back(to_layer):
-    for i in 0..2:
-        cur = detect()
-        if cur == to_layer:
-            _on_L[to_layer](quick=False)          ← 到达 → 正常恢复
-            return True
-        if cur == "L0":
-            break                                 ← 到桌面 → 走恢复
-        back_one()                                ← §4.3
-    return back_recover(to_layer)                 ← §4.4
+    cur = detect()
+    if cur is None:
+        return back_recover(to_layer)            ← 无法判定 → 直接恢复
+    if detect_layer(to_layer):
+        _on_L[to_layer](quick=False)             ← 已在目标层 → 正常恢复
+        return True
+    return back_recover(to_layer)                ← 不在目标层 → 直接恢复
 ```
 
 ### §5.2 `advance(adb, target_layer, scale_w, *, quick=False) → bool`
@@ -224,7 +252,7 @@ back(to_layer):
 advance(target, *, quick):
     while True:
         cur = detect()                            ← §4.1
-        if cur == target:
+        if cur is not None and detect_layer(target):
             _on_L[target](quick=False)            ← 到达 → 正常执行
             return True
         ok = enter_next(quick=quick)              ← §4.2
@@ -239,7 +267,9 @@ advance(target, *, quick):
 ```
 restore(target):
     cur = detect()
-    if cur == target:
+    if cur is None:
+        return back_recover(target)               ← 无法判定 → 直接恢复
+    if detect_layer(target):
         return True
     if layer_index(cur) > layer_index(target):
         return back(target)                       ← 在上面 → 退
@@ -280,6 +310,7 @@ L3 → back("L2") → back_one 失灵 → L0
 | | 框架 | Task |
 |---|------|------|
 | `detect()` | 定义签名 | 覆盖实现 |
+| `detect_layer()` | 定义签名（v0.5.0） | 覆盖实现 |
 | `_on_Lx()` | 按层索引调用 | 覆盖：业务 + 点击 |
 | `enter_next()` | 调 handler + 校验 | — |
 | `back_one()` | KEYCODE_BACK + detect | — |
@@ -377,7 +408,7 @@ model.add_listener(MetricsListener())
         HOME → cold-start → advance(quick=True)
 ```
 
-> 注：`back_one` 连续 3 次未到达目标层时，自动触发 `back_recover` 恢复链。`advance` / `restore` / `back` 是上述原子操作的组合。
+> 注：`detect()` 返回 `None` 或 `back()` 未检测到目标层时，自动触发 `back_recover` 恢复链。`advance` / `restore` / `back` 是上述原子操作的组合。
 
 ---
 

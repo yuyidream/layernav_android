@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "layernav_android"
-version = "0.4.4"
+version = "0.5.0"
 description = "Multi-layer task-stack navigation framework for Android ADB automation. Define N layers, register per-layer handlers, and let the framework handle BACK recovery, cold-start, cross-layer verification, and sub-page navigation (detect_detail + _recover_to_page)."
 readme = "README.md"
 license = {text = "MIT"}
