@@ -14,14 +14,13 @@ Framework provides:
 
 from __future__ import annotations
 
-import logging
 import time
 from dataclasses import dataclass
 from typing import Protocol
 
-from layernav_android._protocol import AdbProtocol
+from loguru import logger
 
-LOG = logging.getLogger("layernav")
+from layernav_android._protocol import AdbProtocol
 
 KEYCODE_BACK = 4
 KEYCODE_HOME = 3
@@ -241,7 +240,7 @@ class BaseLayerModel:
     ) -> str | None:
         i = self._layer_index(layer_key)
         if i < 0:
-            LOG.error("_call_on_layer: unknown layer %s", layer_key)
+            logger.error("_call_on_layer: unknown layer %s", layer_key)
             return None
         method = getattr(self, self._ON_METHODS[i])
         return method(adb, scale_w, quick=quick)
@@ -298,7 +297,7 @@ class BaseLayerModel:
 
         elapsed = time.monotonic() - poll_start
         current = self.detect(adb, scale_w)
-        LOG.warning(
+        logger.warning(
             "poll_until_target_layer: %s→%s timeout after %.1fs (still on %s)",
             cur, target_layer, elapsed, current,
         )
@@ -328,7 +327,7 @@ class BaseLayerModel:
         """
         cur = self.detect(adb, scale_w)
         if self._layer_index(cur) < 0:
-            LOG.error("enter_next: unknown layer %s, cannot advance", cur)
+            logger.error("enter_next: unknown layer %s, cannot advance", cur)
             return False
         target = self._call_on_layer(cur, adb, scale_w, quick=quick)
         if target is None or target == cur:
@@ -351,11 +350,11 @@ class BaseLayerModel:
         3. sleep, detect new layer  ← **validator** (post-check)
         """
         cur = self.detect(adb, scale_w)
-        LOG.debug("back_one: from %s", cur)
+        logger.debug("back_one: from %s", cur)
         adb.key_event(KEYCODE_BACK)
         time.sleep(1.0)
         next_cur = self.detect(adb, scale_w)
-        LOG.debug("back_one: %s → %s", cur, next_cur)
+        logger.debug("back_one: %s → %s", cur, next_cur)
         self._notify_transition(cur, next_cur, "back_one")
         return next_cur
 
@@ -368,11 +367,11 @@ class BaseLayerModel:
         Intended for cold-start preambles and navigation-stack reset.
         """
         cur = self.detect(adb, scale_w)
-        LOG.debug("home_one: from %s", cur)
+        logger.debug("home_one: from %s", cur)
         adb.key_event(KEYCODE_HOME)
         time.sleep(0.8)
         next_cur = self.detect(adb, scale_w)
-        LOG.debug("home_one: %s → %s", cur, next_cur)
+        logger.debug("home_one: %s → %s", cur, next_cur)
         self._notify_transition(cur, next_cur, "home_one")
         return next_cur
 
@@ -391,7 +390,7 @@ class BaseLayerModel:
         wait‑for‑boot + cold‑start).  If *target_page* is given, calls
         :meth:`_recover_to_page` after reaching *target_layer*.
         """
-        LOG.warning("back_recover: cold-start → fast-forward → %s (page=%s)",
+        logger.warning("back_recover: cold-start → fast-forward → %s (page=%s)",
                      target_layer, target_page)
         self.home_one(adb, scale_w)
 
@@ -401,13 +400,13 @@ class BaseLayerModel:
                 if attempt < 4:
                     self._cold_start(adb, "L1", scale_w)
                 else:
-                    LOG.error("back_recover: 3 attempts failed — rebooting device")
+                    logger.error("back_recover: 3 attempts failed — rebooting device")
                     self.home_one(adb, scale_w)
                     self._cold_start(adb, "L1", scale_w, allow_reboot=True)
                 break  # success — exit retry loop
             except TimeoutError:
                 if attempt < 3:
-                    LOG.warning(
+                    logger.warning(
                         "back_recover: cold-start attempt %d/3 timed out "
                         "— retrying", attempt,
                     )
@@ -415,12 +414,12 @@ class BaseLayerModel:
                 elif attempt == 3:
                     continue  # → reboot attempt
                 else:
-                    LOG.error("back_recover: cold-start timed out after reboot")
+                    logger.error("back_recover: cold-start timed out after reboot")
                     self._notify_recovery(target_layer, False)
                     return False
             except Exception:
                 if attempt < 3:
-                    LOG.warning(
+                    logger.warning(
                         "back_recover: cold-start attempt %d/3 exception "
                         "— retrying", attempt, exc_info=True,
                     )
@@ -428,7 +427,7 @@ class BaseLayerModel:
                 elif attempt == 3:
                     continue  # → reboot attempt
                 else:
-                    LOG.error(
+                    logger.error(
                         "back_recover: cold-start exception after reboot",
                         exc_info=True,
                     )
@@ -445,7 +444,7 @@ class BaseLayerModel:
                 target_layer, target_page, adb, scale_w,
             )
             if not page_ok:
-                LOG.error(
+                logger.error(
                     "back_recover: reached L%s but page=%s recovery failed",
                     target_layer, target_page,
                 )
@@ -469,7 +468,7 @@ class BaseLayerModel:
         """
         cur = self.detect(adb, scale_w)
         if cur is None:
-            LOG.warning("back: detect() returned None — falling back to back_recover")
+            logger.warning("back: detect() returned None — falling back to back_recover")
             return self.back_recover(adb, to_layer, scale_w, target_page=target_page)
         if self.detect_layer(adb, scale_w, to_layer):
             self._call_on_layer(to_layer, adb, scale_w, quick=False)
@@ -495,7 +494,7 @@ class BaseLayerModel:
                 self._call_on_layer(target_layer, adb, scale_w, quick=False)
                 return True
             if self._layer_index(cur) < 0:
-                LOG.warning(
+                logger.warning(
                     "advance: unknown layer %s, cold-starting → %s",
                     cur, target_layer,
                 )
@@ -519,7 +518,7 @@ class BaseLayerModel:
         """
         cur = self.detect(adb, scale_w)
         if cur is None:
-            LOG.warning("restore: detect() returned None — falling back to back_recover")
+            logger.warning("restore: detect() returned None — falling back to back_recover")
             return self.back_recover(adb, target_layer, scale_w, target_page=target_page)
         if self.detect_layer(adb, scale_w, target_layer):
             if target_page is not None:

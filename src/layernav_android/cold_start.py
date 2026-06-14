@@ -26,13 +26,12 @@ Screen dimensions are always auto‑detected via ``adb shell wm size``.
 
 from __future__ import annotations
 
-import logging
 import re
 import time
 
-from layernav_android._protocol import AdbProtocol
+from loguru import logger
 
-LOG = logging.getLogger("layernav.cold_start")
+from layernav_android._protocol import AdbProtocol
 
 _SZ_RE = re.compile(r"(\d{3,})\s*x\s*(\d{3,})")
 
@@ -115,16 +114,16 @@ def cold_start_app_from_launcher(
     """
     screen_w, screen_h = _resolve_screen_size(adb)
     scale_w = screen_w / 1080.0
-    LOG.info("cold_start: screen %dx%d scale_w=%.3f", screen_w, screen_h, scale_w)
+    logger.info("cold_start: screen %dx%d scale_w=%.3f", screen_w, screen_h, scale_w)
 
     deadline = time.monotonic() + deadline_s
 
     if force_stop_before:
-        LOG.info("cold_start: force-stop %s", package)
+        logger.info("cold_start: force-stop %s", package)
         try:
             adb._run(["shell", "am", "force-stop", package])
         except Exception:
-            LOG.warning("cold_start: force-stop %s failed (non-fatal)", package)
+            logger.warning("cold_start: force-stop %s failed (non-fatal)", package)
         time.sleep(0.65)
 
     # -- path 1: monkey LAUNCHER --
@@ -153,11 +152,11 @@ def cold_start_app_from_launcher(
     if not allow_reboot:
         return False
 
-    LOG.warning("cold_start: all 3 launch paths failed, rebooting device")
+    logger.warning("cold_start: all 3 launch paths failed, rebooting device")
     try:
         adb._run(["reboot"])
     except Exception as exc:
-        LOG.error("cold_start: adb reboot failed (%s)", exc)
+        logger.error("cold_start: adb reboot failed (%s)", exc)
         return False
 
     # Wait for device to disconnect + come back
@@ -177,14 +176,14 @@ def cold_start_app_from_launcher(
         time.sleep(1.5)
         _tap_session_tab(adb, session_tab_x, session_tab_y)
         if _check_foreground(adb, package):
-            LOG.info("cold_start: succeeded after reboot")
+            logger.info("cold_start: succeeded after reboot")
             return True
     dx2, dy2 = dock_app_icon_coords(
         screen_w2, screen_h2, scale_w2, app_name=app_name, M=M, N=N,
     )
     if _try_dock_tap_with_retry(adb, package, dx2, dy2, session_tab_x, session_tab_y):
         if _check_foreground(adb, package):
-            LOG.info("cold_start: succeeded after reboot + Dock")
+            logger.info("cold_start: succeeded after reboot + Dock")
             return True
 
     return False
@@ -204,7 +203,7 @@ def _resolve_screen_size(adb: AdbProtocol) -> tuple[int, int]:
 
 
 def _try_monkey(adb: AdbProtocol, package: str) -> bool:
-    LOG.info("cold_start: monkey LAUNCHER for %s", package)
+    logger.info("cold_start: monkey LAUNCHER for %s", package)
     try:
         adb._run(
             ["shell", "monkey", "-p", package, "-c",
@@ -212,12 +211,12 @@ def _try_monkey(adb: AdbProtocol, package: str) -> bool:
         )
         return True
     except Exception as exc:
-        LOG.warning("cold_start: monkey failed (%s)", exc)
+        logger.warning("cold_start: monkey failed (%s)", exc)
         return False
 
 
 def _try_am_start(adb: AdbProtocol, package: str) -> bool:
-    LOG.info("cold_start: am start LAUNCHER for %s", package)
+    logger.info("cold_start: am start LAUNCHER for %s", package)
     try:
         adb._run(
             ["shell", "am", "start",
@@ -227,7 +226,7 @@ def _try_am_start(adb: AdbProtocol, package: str) -> bool:
         )
         return True
     except Exception as exc:
-        LOG.warning("cold_start: am start failed (%s)", exc)
+        logger.warning("cold_start: am start failed (%s)", exc)
         return False
 
 
@@ -237,7 +236,7 @@ def _tap_session_tab(
     session_tab_y: int | None,
 ) -> None:
     if session_tab_x is not None and session_tab_y is not None:
-        LOG.info("cold_start: tap session tab (%d, %d)", session_tab_x, session_tab_y)
+        logger.info("cold_start: tap session tab (%d, %d)", session_tab_x, session_tab_y)
         adb.tap(session_tab_x, session_tab_y)
         time.sleep(0.55)
 
@@ -250,7 +249,7 @@ def _try_dock_tap_with_retry(
     session_tab_x: int | None,
     session_tab_y: int | None,
 ) -> bool:
-    LOG.info("cold_start: Dock tap at (%d, %d) for %s (pre-wait %.1fs, max %d retries)",
+    logger.info("cold_start: Dock tap at (%d, %d) for %s (pre-wait %.1fs, max %d retries)",
              dx, dy, package, _DOCK_PRE_WAIT_S, _DOCK_RETRIES)
     for attempt in range(1 + _DOCK_RETRIES):
         if attempt > 0:
@@ -259,9 +258,9 @@ def _try_dock_tap_with_retry(
         time.sleep(1.2)
         _tap_session_tab(adb, session_tab_x, session_tab_y)
         if _check_foreground(adb, package):
-            LOG.info("cold_start: Dock tap succeeded on attempt %d", attempt + 1)
+            logger.info("cold_start: Dock tap succeeded on attempt %d", attempt + 1)
             return True
-        LOG.warning("cold_start: Dock tap attempt %d failed", attempt + 1)
+        logger.warning("cold_start: Dock tap attempt %d failed", attempt + 1)
     return False
 
 
@@ -279,12 +278,12 @@ def _wait_for_device(adb: AdbProtocol, timeout_s: float = 90) -> None:
         try:
             out = adb._run(["shell", "echo", "ok"])
             if "ok" in out:
-                LOG.info("cold_start: device back online after reboot")
+                logger.info("cold_start: device back online after reboot")
                 return
         except Exception:
             pass
         time.sleep(3)
-    LOG.warning("cold_start: device did not come back within %.0fs", timeout_s)
+    logger.warning("cold_start: device did not come back within %.0fs", timeout_s)
 
 
 def _wait_for_boot_completed(adb: AdbProtocol, timeout_s: float = 60) -> None:
@@ -294,9 +293,9 @@ def _wait_for_boot_completed(adb: AdbProtocol, timeout_s: float = 60) -> None:
         try:
             out = adb._run(["shell", "getprop", "sys.boot_completed"])
             if out.strip() == "1":
-                LOG.info("cold_start: boot completed")
+                logger.info("cold_start: boot completed")
                 return
         except Exception:
             pass
         time.sleep(3)
-    LOG.warning("cold_start: boot did not complete within %.0fs", timeout_s)
+    logger.warning("cold_start: boot did not complete within %.0fs", timeout_s)

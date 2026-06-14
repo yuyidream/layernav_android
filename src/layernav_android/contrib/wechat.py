@@ -6,17 +6,15 @@ actual screenshot-based layer classification.
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import Any
 
+from loguru import logger
 import numpy as np
 
 from layernav_android._protocol import AdbProtocol
 from layernav_android.base import KEYCODE_BACK, BaseLayerModel, LayerDef
 from layernav_android.cold_start import cold_start_app_from_launcher
-
-LOG = logging.getLogger("layernav.wechat")
 
 WECHAT_PACKAGE = "com.tencent.mm"
 
@@ -156,7 +154,7 @@ class WeChatGroupLayerModel(BaseLayerModel):
         *,
         allow_reboot: bool = False,
     ) -> None:
-        LOG.info("_cold_start: HOME → WeChat → poll %s (allow_reboot=%s)",
+        logger.info("_cold_start: HOME → WeChat → poll %s (allow_reboot=%s)",
                  target_layer, allow_reboot)
 
         png = adb.screencap()
@@ -179,7 +177,7 @@ class WeChatGroupLayerModel(BaseLayerModel):
         deadline = time.monotonic() + deadline_s
         while time.monotonic() < deadline:
             if self.detect_layer(adb, scale_w, target_layer):
-                LOG.info("_cold_start: reached %s", target_layer)
+                logger.info("_cold_start: reached %s", target_layer)
                 return
             time.sleep(1.0)
         raise TimeoutError(
@@ -222,7 +220,7 @@ class WeChatGroupLayerModel(BaseLayerModel):
         """
         non_tab = self._NON_TAB_PAGES.get(layer, [])
         if page_name in non_tab:
-            LOG.info("_recover_to_page: %s → %s (verify-only)", layer, page_name)
+            logger.info("_recover_to_page: %s → %s (verify-only)", layer, page_name)
             result = self.detect_detail(adb, scale_w)
             return result.layer_key == layer and result.page_name == page_name
 
@@ -238,7 +236,7 @@ class WeChatGroupLayerModel(BaseLayerModel):
             tab_x = tab_width // 2 + tab_idx * tab_width
 
             for attempt in range(3):
-                LOG.info("_recover_to_page: L1 → %s tap (%d, %d) attempt=%d/3",
+                logger.info("_recover_to_page: L1 → %s tap (%d, %d) attempt=%d/3",
                          page_name, tab_x, tab_y, attempt + 1)
                 adb.tap(tab_x, tab_y)
                 time.sleep(0.55)
@@ -246,10 +244,10 @@ class WeChatGroupLayerModel(BaseLayerModel):
                 if result.page_name == page_name:
                     return True
                 if attempt < 2:
-                    LOG.info("_recover_to_page: page=%s (expected=%s), retrying",
+                    logger.info("_recover_to_page: page=%s (expected=%s), retrying",
                              result.page_name, page_name)
 
-            LOG.warning("_recover_to_page: 3 attempts exhausted, page=%s",
+            logger.warning("_recover_to_page: 3 attempts exhausted, page=%s",
                         result.page_name)
             return False
 

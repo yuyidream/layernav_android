@@ -9,14 +9,13 @@
 
 from __future__ import annotations
 
-import logging
 import time
+
+from loguru import logger
 
 from layernav_android._protocol import AdbProtocol
 from layernav_android.base import KEYCODE_BACK, BaseLayerModel, LayerDef
 from layernav_android.cold_start import cold_start_app_from_launcher
-
-LOG = logging.getLogger("layernav.xhs")
 
 
 class XhsLayerModel(BaseLayerModel):
