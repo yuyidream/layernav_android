@@ -1,0 +1,10 @@
+# 与 rules.md 一致：仓库内文本统一为 LF（避免 CRLF、GitHub Actions、跨平台脚本问题）
+# 参考：https://docs.github.com/get-started/git-basics/configuring-git-to-handle-line-endings
+* text=auto eol=lf
+
+# Windows 批处理在检出时保留 CRLF（CMD 习惯）
+*.{cmd,[cC][mM][dD]} text eol=crlf
+*.{bat,[bB][aA][tT]} text eol=crlf
+
+# 二进制，禁止换行符规范化
+*.{ico,png,jpg,jpeg,gif,webp,woff,woff2} binary

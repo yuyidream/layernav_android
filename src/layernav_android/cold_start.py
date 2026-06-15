@@ -29,9 +29,10 @@ from __future__ import annotations
 import re
 import time
 
-from loguru import logger
-
 from layernav_android._protocol import AdbProtocol
+from layernav_android.logging import get_logger
+
+logger = get_logger(__name__)
 
 _SZ_RE = re.compile(r"(\d{3,})\s*x\s*(\d{3,})")
 

@@ -1,0 +1,20 @@
+# 提交前自动检查：CRLF 换行符、行尾空格、文件末尾换行
+# 安装：pre-commit install
+# 手动运行：pre-commit run --all-files
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        description: 强制 LF 换行符，自动修复 CRLF
+      - id: trailing-whitespace
+        description: 删除行尾空格
+      - id: end-of-file-fixer
+        description: 文件末尾补一个换行符
+      - id: check-yaml
+        description: YAML 语法检查
+      - id: check-json
+        description: JSON 语法检查
+      - id: check-toml
+        description: TOML 语法检查

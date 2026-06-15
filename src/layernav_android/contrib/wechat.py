@@ -9,12 +9,14 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from loguru import logger
 import numpy as np
 
 from layernav_android._protocol import AdbProtocol
 from layernav_android.base import KEYCODE_BACK, BaseLayerModel, LayerDef
 from layernav_android.cold_start import cold_start_app_from_launcher
+from layernav_android.logging import get_logger
+
+logger = get_logger(__name__)
 
 WECHAT_PACKAGE = "com.tencent.mm"
 

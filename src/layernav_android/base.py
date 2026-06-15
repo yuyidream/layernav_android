@@ -18,9 +18,10 @@ import time
 from dataclasses import dataclass
 from typing import Protocol
 
-from loguru import logger
-
 from layernav_android._protocol import AdbProtocol
+from layernav_android.logging import get_logger
+
+logger = get_logger(__name__)
 
 KEYCODE_BACK = 4
 KEYCODE_HOME = 3
