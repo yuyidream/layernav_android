@@ -43,10 +43,12 @@ class WeChatGroupLayerModel(BaseLayerModel):
 ```python
 @dataclass
 class LayerDef:
-    key: str         # "L0" | "L1" | ... | "L(N-1)"
-    name: str        # 机器名
-    label_cn: str    # 中文名
-    detection: str   # 检测方法说明
+    key: str             # "L0" | "L1" | ... | "L(N-1)"
+    name: str            # 机器名
+    label_cn: str        # 中文名
+    detection: str       # 检测方法说明
+    page_name: str = ""  # 可选子页面名（如 L1 的 "chat_list" / "contacts"）
+    detection_extra: str = ""  # 检测补充说明（如可切换的子页面列表）
 ```
 
 ---
@@ -109,6 +111,40 @@ def detect_layer(self, adb, scale_w, layer: str) -> bool:
 
 **设计意图**：`detect()` 与 `detect_layer()` 可以因检测精度差异而给出不同结果——`detect_layer(target)` 可加入额外的否定确认条件（如 L1 检测时临时排除 L2 特征），这些条件不影响 `detect()` 的"我在哪"语义。
 
+### §3.4 `detect_detail(adb, scale_w) → DetectResult`
+
+**带子页面信息的层级检测**：返回 `DetectResult`（包含 `layer_key` 和 `page_name`）。默认实现调用 `detect()` 后从 `layers` 表中查找 `LayerDef.page_name`；子类可覆盖以**动态设置** `page_name`（如 L1 根据当前所在 Tab 返回 `"chat_list"` 或 `"contacts"`）。
+
+```python
+@dataclass
+class DetectResult:
+    layer_key: str   # "L0" | "L1" | "L2" | "L3"
+    page_name: str = ""  # 从 LayerDef.page_name 查表或动态设置
+
+def detect_detail(self, adb, scale_w) -> DetectResult:
+    layer_key = self.detect(adb, scale_w)
+    page_name = ""
+    for ld in self.layers:
+        if ld.key == layer_key:
+            page_name = ld.page_name
+            break
+    return DetectResult(layer_key=layer_key, page_name=page_name)
+```
+
+### §3.5 `_recover_to_page(layer, page_name, adb, scale_w) → bool`
+
+**到达目标层后导航到指定子页面**。由 `back_recover`（及 `restore` 在已在目标层但子页面不符时）调用。默认实现：调用 `detect_detail()` 校验 `page_name` 是否匹配；子类可覆盖为具体导航动作（如 L1 切换到「微信」Tab）。
+
+```python
+def _recover_to_page(self, layer, page_name, adb, scale_w) -> bool:
+    result = self.detect_detail(adb, scale_w)
+    return result.page_name == page_name
+```
+
+### §3.6 `init(adb) → None`
+
+**一次性初始化钩子**（可选覆盖）。框架在首次使用模型前调用，子类可在此完成 ADB 设备相关的预配置。默认空实现。
+
 ---
 
 ## §4. 框架 API —— 5 个原子操作 + 1 个目标感知检测
@@ -125,23 +161,24 @@ def detect_layer(self, adb, scale_w, layer: str) -> bool:
 
 ---
 
-### §4.2 `enter_next(adb, scale_w, *, quick=False) → bool`
+### §4.2 `enter_next(adb, scale_w, *, quick=False, max_wait_s=8.0) → bool`
 
 **从当前层级进入下一个层级**（单步）。
 **必须先检查当前层级，进入后立即检查目标层级。**
 
 ```
-enter_next(*, quick):
-    1. cur = detect()                                    ← ★ 先检查当前层级
+enter_next(*, quick, max_wait_s):
+    1. cur = detect()                                    ← ★ 先检查当前层级（guard）
+       若未知层 → 报错返回 False
     2. result = _on_L[cur](adb, scale_w, quick=quick)   ← 调 handler（handler 执行业务+点击）
     3. if result is None or result == cur:
          return True                                     ← handler 说无需前进
-    4. 轮询 detect()，间隔 0.3s→0.6s→0.9s→1.2s→1.5s→2.0s，最长 8s  ← ★ 纯自适应轮询，无固定预等待
+    4. 轮询 detect_layer(result)，间隔 0.3s→0.6s→0.9s→1.2s→1.5s→2.0s，最长 max_wait_s  ← ★ 纯自适应轮询，无固定预等待
     5. 命中目标 → return True
     6. 超时未到达 → return False
 ```
 
-`quick` 参数透传给 handler。
+`quick` 参数透传给 handler；`max_wait_s` 控制轮询总时长（默认 8s）。
 
 ---
 
@@ -204,7 +241,7 @@ poll_until_target_layer(target_layer):
 **BACK 失败后恢复**：回到手机主屏幕 → 恢复到 BACK 的目标层级（v0.4.3: 冷启动 3 次重试 + `adb reboot` 兜底）。
 
 ```
-back_recover(target_layer):
+back_recover(target_layer, *, target_page):
     1. KEYCODE_HOME → 冷启动到 L1（子类覆盖 _cold_start）
        ├─ 尝试 1: _cold_start(L1) — 失败 → HOME 重试
        ├─ 尝试 2: _cold_start(L1) — 失败 → HOME 重试
@@ -212,7 +249,10 @@ back_recover(target_layer):
        └─ 尝试 4: _cold_start(L1, allow_reboot=True) — 失败 → return False
     2. 循环 enter_next(quick=True) 直到 target_layer  ← 快速穿过中间层
     3. _on_L[target_layer](quick=False)                 ← 正常恢复业务（advance 内部完成）
-    4. return detect_layer(target_layer)
+    4. if target_page is not None:
+         ok = _recover_to_page(target_layer, target_page, ...)  ← 导航到子页面
+         if not ok: return False
+    5. return detect_layer(target_layer)
 ```
 
 | 参数 | 说明 | v0.4.3 新增 |
@@ -229,52 +269,64 @@ back_recover(target_layer):
 
 以下基于 4 个原子操作构建。
 
-### §5.1 `back(adb, to_layer, scale_w) → bool`
+### §5.1 `back(adb, to_layer, scale_w, *, target_page=None) → bool`
 
 从任意当前层后退到 `to_layer`。
 
 ```
-back(to_layer):
+back(to_layer, *, target_page):
     cur = detect()
     if cur is None:
-        return back_recover(to_layer)            ← 无法判定 → 直接恢复
+        return back_recover(to_layer, target_page=target_page)  ← 无法判定 → 直接恢复
     if detect_layer(to_layer):
         _on_L[to_layer](quick=False)             ← 已在目标层 → 正常恢复
+        if target_page is not None:
+            return _recover_to_page(to_layer, target_page, ...)
         return True
-    return back_recover(to_layer)                ← 不在目标层 → 直接恢复
+    return back_recover(to_layer, target_page=target_page)  ← 不在目标层 → 直接恢复
 ```
 
-### §5.2 `advance(adb, target_layer, scale_w, *, quick=False) → bool`
+### §5.2 `advance(adb, target_layer, scale_w, *, quick=False, max_wait_s=8.0) → bool`
 
-从当前层逐层前进到 `target_layer`。
+从当前层逐层前进到 `target_layer`。中间层使用 `quick` 模式，到达目标层时始终 `quick=False`。
 
 ```
-advance(target, *, quick):
+advance(target, *, quick, max_wait_s):
     while True:
         cur = detect()                            ← §4.1
         if cur is not None and detect_layer(target):
             _on_L[target](quick=False)            ← 到达 → 正常执行
             return True
-        ok = enter_next(quick=quick)              ← §4.2
+        if layer_index(cur) < 0:                  ← 未知层
+            _cold_start(adb, target_layer, ...)   ← 冷启动恢复
+            continue
+        ok = enter_next(quick=quick, max_wait_s=max_wait_s)  ← §4.2
         if not ok:
             return False
 ```
 
-### §5.3 `restore(adb, target_layer, scale_w) → bool`
+### §5.3 `restore(adb, target_layer, scale_w, *, target_page=None) → bool`
 
 从任意位置恢复到 `target_layer`（自动判断方向）。
 
 ```
-restore(target):
+restore(target, *, target_page):
     cur = detect()
     if cur is None:
-        return back_recover(target)               ← 无法判定 → 直接恢复
+        return back_recover(target, target_page=target_page)  ← 无法判定 → 直接恢复
     if detect_layer(target):
+        if target_page is not None:
+            return _recover_to_page(target, target_page, ...)  ← 已在目标层，只需修正子页面
         return True
     if layer_index(cur) > layer_index(target):
-        return back(target)                       ← 在上面 → 退
+        return back(target, target_page=target_page)           ← 在上面 → 退
     else:
-        return advance(target, quick=True)        ← 在下面 → 快速进
+        ok = advance(target, quick=True)                       ← 在下面 → 快速进
+        if not ok:
+            return False
+        if target_page is not None:
+            return _recover_to_page(target, target_page, ...)
+        return True
 ```
 
 ---
@@ -311,14 +363,18 @@ L3 → back("L2") → back_one 失灵 → L0
 |---|------|------|
 | `detect()` | 定义签名 | 覆盖实现 |
 | `detect_layer()` | 定义签名（v0.5.0） | 覆盖实现 |
+| `detect_detail()` | 定义签名 + 默认实现 | 可选覆盖 |
+| `DetectResult` | 定义类型 | — |
 | `_on_Lx()` | 按层索引调用 | 覆盖：业务 + 点击 |
+| `init()` | 调用钩子 | 可选覆盖 |
+| `_recover_to_page()` | 调用钩子 | 可选覆盖 |
 | `enter_next()` | 调 handler + 校验 | — |
 | `back_one()` | KEYCODE_BACK + detect | — |
 | `home_one()` | KEYCODE_HOME + detect | — |
 | `poll_until_target_layer()` | 自适应轮询检测目标层 | — |
-| `back_recover()` | 冷启动 + 快速前进 + 正常恢复 | — |
-| `back()` | 循环 back_one + back_recover | — |
-| `advance()` | 循环 enter_next | — |
+| `back_recover()` | 冷启动 + 快速前进 + 子页面恢复 | — |
+| `back()` | detect + back_recover | — |
+| `advance()` | 循环 enter_next + 未知层冷启动 | — |
 | `restore()` | 方向判断 + 调 back/advance | — |
 | `home_one(adb)` | 模块级函数 — KEYCODE_HOME + sleep | — |
 | 点击动作 | — | handler 内 `adb.tap()` |
@@ -339,7 +395,7 @@ L3 → back("L2") → back_one 失灵 → L0
 | 概念 | 框架中的对应 | 说明 |
 |------|------------|------|
 | **guard**（守卫） | `enter_next` 步骤 1 的 `detect()` | 条件检查：当前层是否允许前进？ |
-| **validator**（验证器） | `enter_next` 步骤 4-5 的轮询 `detect()` | 后置校验：页面是否真的跳到了目标层？ |
+| **validator**（验证器） | `enter_next` 步骤 4-5 的轮询 `detect_layer()` | 后置校验：页面是否真的跳到了目标层？ |
 | **guard** | `back_one` 步骤 1 的 `detect()` | 条件检查：当前层是否允许后退？ |
 | **validator** | `back_one` 步骤 3 的 `detect()` | 后置校验：BACK 后实际在哪个层？ |
 
@@ -434,6 +490,7 @@ def cold_start_app_from_launcher(
     session_tab_y: int | None = None,
     force_stop_before: bool = True,
     deadline_s: float = 25.0,
+    allow_reboot: bool = False,
 ) -> bool:
 ```
 
@@ -447,8 +504,16 @@ def cold_start_app_from_launcher(
 | `session_tab_x`, `session_tab_y` | 启动后需点击的 APP 内底栏 Tab 坐标（如微信「微信」Tab），不传则跳过 | `None` |
 | `force_stop_before` | 冷启动前是否 `am force-stop` | `True` |
 | `deadline_s` | 总超时 | `25.0` |
+| `allow_reboot` | 三条启动路径全部失败后是否执行 `adb reboot` 终极兜底（默认关闭） | `False` |
 
-屏幕尺寸始终通过 `adb shell wm size` 自动获取，调用方无需传入。
+屏幕尺寸始终通过 `adb shell wm size` 自动获取，调用方无需传入。另有 **`APP_DEFAULTS`** 常量定义各 APP 的默认 `M`/`N`：
+
+```python
+APP_DEFAULTS = {
+    "wechat": {"M": 4, "N": 3},
+    "xhs":    {"M": 4, "N": 1},
+}
+```
 
 ### §9.3 冷启动路径
 
@@ -476,8 +541,10 @@ def dock_app_icon_coords(
     """Dock M 等分，APP 在第 N 格（1‑indexed），返回该槽位近似中心。"""
     if N is None:
         N = {"wechat": 3, "xhs": 1}.get(app_name, 1)
+    pad_x = max(12, screen_w // 8)                      # 左右留白，避免边缘误触
     dx = int(round(screen_w * (N - 0.5) / M))
-    dy = screen_h - max(48, int(round(52 * scale_w)))
+    dx = max(pad_x, min(screen_w - pad_x, dx))          # 夹持在安全范围内
+    dy = screen_h - max(48, int(round(52 * max(scale_w, 1e-6))))  # scale_w 防除零
     return dx, dy
 ```
 
