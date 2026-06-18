@@ -322,7 +322,7 @@ class TestRestore:
         m = _TestModel()
         adb = MockAdb()
         # restore: detect + detect_layer → 2
-        # advance: detect + detect_layer → 2  
+        # advance: detect + detect_layer → 2
         # enter_next: detect → 1, poll: detect + detect_layer → 2
         # advance loop2: detect + detect_layer → 2 = 9 total
         m._detect_returns = ["L0", "L0", "L1", "L1", "L1", "L1", "L2", "L2", "L2"]
