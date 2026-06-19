@@ -7,8 +7,9 @@ Framework—Task contract:
         - ``_on_Lx`` — per-layer handler (business logic + tap)
 
 Framework provides:
-    Atomic:   ``detect``  ``detect_layer``  ``enter_next``  ``back_one``  ``home_one``  ``back_recover``
+    Atomic:   ``detect``  ``detect_layer``  ``back_one``  ``home_one``  ``back_recover``
              ``poll_until_target_layer``  (adaptive-poll after caller tap)
+    Tap:      ``_do_tap`` — 层间点击，子类覆盖加入防检测策略
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ logger = get_logger(__name__)
 KEYCODE_BACK = 4
 KEYCODE_HOME = 3
 
-# enter_next polling intervals (no fixed pre-wait — pure adaptive poll)
+# Adaptive polling intervals (0.3s → 0.6s → … → 2.0s)
 _ENTER_NEXT_POLL_INITIAL = 0.3
 _ENTER_NEXT_POLL_STEP   = 0.3
 _ENTER_NEXT_POLL_MAX    = 2.0
@@ -91,14 +92,14 @@ class LayerListener(Protocol):
     ) -> None:
         """Called after an atomic layer transition completes.
 
-        *method* is one of ``"enter_next"`` or ``"back_one"``.
+        *method* is one of ``"back_one"`` or ``"home_one"``.
         """
         ...
 
     def on_timeout(
         self, from_layer: str, target_layer: str, elapsed_s: float,
     ) -> None:
-        """Called when :meth:`BaseLayerModel.enter_next` polling times out."""
+        """Called when a layer transition polling times out."""
         ...
 
     def on_recovery(self, target_layer: str, ok: bool) -> None:
@@ -165,6 +166,20 @@ class BaseLayerModel:
     def _notify_recovery(self, target_layer: str, ok: bool) -> None:
         for lst in self._listeners:
             lst.on_recovery(target_layer, ok)
+
+    # ── Overridable tap ─────────────────────────────────────────────────────
+
+    def _do_tap(
+        self, adb: AdbProtocol,
+        click_x: int, click_y: int,
+        jitter_x: int = 0, jitter_y: int = 0,
+    ) -> None:
+        """层间点击。默认 ``adb.tap``，子类覆盖加入防检测策略。
+
+        *jitter_x* / *jitter_y* 由调用方按场景传入（如 L1→L2 宽抖动 20px），
+        子类内部策略自由替换（如 mumdad ``click_xonly``）。
+        """
+        adb.tap(click_x, click_y)
 
     # ── Subclass overrides ────────────────────────────────────────────────────
 
@@ -278,9 +293,8 @@ class BaseLayerModel:
         Caller performs a tap (or any navigation action) **before** calling
         this method, then polls here for the target layer transition.
 
-        Same 0.3s→2.0s adaptive engine as :meth:`enter_next`.
-        Does **not** fire listener notifications — callers that need them
-        (e.g. :meth:`enter_next`) handle that separately.
+        Adaptive intervals: 0.3s → 0.6s → … → 2.0s, capped at *max_wait_s*.
+        Does **not** fire listener notifications.
         """
         cur = self.detect(adb, scale_w)
         if cur is not None and self.detect_layer(adb, scale_w, target_layer):
@@ -301,47 +315,6 @@ class BaseLayerModel:
             cur, target_layer, elapsed, current,
         )
         return False
-
-    def enter_next(
-        self,
-        adb: AdbProtocol,
-        scale_w: float,
-        *,
-        quick: bool = False,
-        max_wait_s: float = 8.0,
-    ) -> bool:
-        """Advance ONE layer from current position.
-
-        1. detect current layer  ← **guard** (pre-check)
-        2. call _on_L[cur](quick) — handler does business + tap
-        3. if handler returns None or same layer → stop (success)
-        4. poll detect() at adaptive intervals (0.3s→0.6s→…→2.0s)
-           until target layer reached or *max_wait_s* elapsed
-           ← **validator** (post-check, no fixed pre-wait)
-
-        This handles variable transition times (network loading, animations)
-        without a single fixed wait — fast transitions hit on the first or
-        second poll, slow ones are covered by the growing interval up to
-        *max_wait_s*.
-        """
-        cur = self.detect(adb, scale_w)
-        if self._layer_index(cur) < 0:
-            logger.error("enter_next: unknown layer %s, cannot advance", cur)
-            return False
-        target = self._call_on_layer(cur, adb, scale_w, quick=quick)
-        if target is None or target == cur:
-            return True
-
-        poll_start = time.monotonic()
-        ok = self.poll_until_target_layer(
-            adb, target, scale_w, max_wait_s=max_wait_s,
-        )
-        if ok:
-            self._notify_transition(cur, target, "enter_next")
-        else:
-            elapsed = time.monotonic() - poll_start
-            self._notify_timeout(cur, target, elapsed)
-        return ok
 
     def back_one(self, adb: AdbProtocol, scale_w: float, *, max_retries: int = 3) -> str:
         """退回到上一层（KEYCODE_BACK，重试 + 冷启动兜底）。
@@ -464,10 +437,7 @@ class BaseLayerModel:
                 )
                 self._notify_recovery(target_layer, False)
                 return False
-            ok = self.enter_next(adb, scale_w, quick=True)
-            if not ok:
-                self._notify_recovery(target_layer, False)
-                return False
+            self._call_on_layer(cur, adb, scale_w, quick=True)
         self._call_on_layer(target_layer, adb, scale_w, quick=False)
 
         if target_page is not None:

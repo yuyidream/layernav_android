@@ -192,115 +192,38 @@ class TestHomeOne:
         assert lst.transitions[0] == ("L2", "L0", "home_one")
 
 
-class TestEnterNext:
-    def test_enter_next_calls_handler_and_verifies(self):
-        m = _TestModel()
-        adb = MockAdb()
-        m._detect_returns = ["L0", "L1", "L1"]  # +1 for detect_layer in poll
-        ok = m.enter_next(adb, 1.0)
-        assert ok is True
-
-    def test_enter_next_returns_true_when_handler_returns_none(self):
-        m = _TestModel()
-        adb = MockAdb()
-
-        def _on_L0_none(*args, **kwargs):
-            return None
-        m._on_L0 = _on_L0_none
-        m._detect_returns = ["L0"]
-        ok = m.enter_next(adb, 1.0)
-        assert ok is True
-
-    def test_enter_next_polls_until_target_reached(self):
-        m = _TestModel()
-        adb = MockAdb()
-        m._detect_returns = ["L1", "L1", "L2"]
-
-        def _on_L1_poll(*args, **kwargs):
-            return "L2"
-        m._on_L1 = _on_L1_poll
-
-        ok = m.enter_next(adb, 1.0)
-        assert ok is True
-
-    def test_enter_next_returns_false_on_timeout(self):
-        m = _TestModel()
-        adb = MockAdb()
-
-        def _on_L1_stuck(*args, **kwargs):
-            return "L2"
-        m._on_L1 = _on_L1_stuck
-        m._detect_returns = ["L1", "L1", "L1", "L1", "L1"]
-
-        ok = m.enter_next(adb, 1.0, max_wait_s=1.0)
-        assert ok is False
-
-    def test_enter_next_notifies_on_success(self):
-        m = _TestModel()
-        lst = _RecordListener()
-        m.add_listener(lst)
-        adb = MockAdb()
-        m._detect_returns = ["L0", "L1", "L1"]  # +1 for detect_layer in poll
-        m.enter_next(adb, 1.0)
-        assert len(lst.transitions) == 1
-        assert lst.transitions[0] == ("L0", "L1", "enter_next")
-
-    def test_enter_next_notifies_on_timeout(self):
-        m = _TestModel()
-        lst = _RecordListener()
-        m.add_listener(lst)
-        adb = MockAdb()
-
-        def _on_L1_stuck(*args, **kwargs):
-            return "L2"
-        m._on_L1 = _on_L1_stuck
-        m._detect_returns = ["L1", "L1", "L1", "L1", "L1"]
-
-        m.enter_next(adb, 1.0, max_wait_s=1.0)
-        assert len(lst.timeouts) == 1
-        assert lst.timeouts[0][0] == "L1"
-        assert lst.timeouts[0][1] == "L2"
-
-
 class TestBackRecover:
     def test_back_recover_succeeds_after_cold_start(self):
         m = _TestModel()
         adb = MockAdb()
 
         def _cold_start(adb, target, scale):
-            m._detect_returns = ["L1", "L1", "L1"]
+            m._detect_returns = ["L1", "L1"]
 
         m._cold_start = _cold_start
 
         m._detect_returns = [
-            "L1",  # advance detect → at target → _call_on_layer
-            "L1",  # final detect
+            "L1",  # detect_layer("L1") → True, skip fast-forward loop
+            "L1",  # final detect_layer("L1") return check
         ]
         ok = m.back_recover(adb, "L1", 1.0)
         assert ok is True
         assert adb._events == [KEYCODE_HOME]
 
-    def test_back_recover_fails_when_advance_fails(self):
+    def test_back_recover_fails_when_cold_start_fails(self):
         m = _TestModel()
         adb = MockAdb()
+        lst = _RecordListener()
+        m.add_listener(lst)
 
-        # advance(L1) → enter_next(L0→L1) polls with default max_wait_s=8.0:
-        # guard + 7 polls + timeout detect = 9 returns
-        m._detect_returns = [
-            "L0",  # advance: cur = detect → L0, not L1 → enter_next
-            "L0",  # enter_next guard
-            "L0",  # poll 1 (0.3s)
-            "L0",  # poll 2 (0.6s→cum 0.9s)
-            "L0",  # poll 3 (0.9s→cum 1.8s)
-            "L0",  # poll 4 (1.2s→cum 3.0s)
-            "L0",  # poll 5 (1.5s→cum 4.5s)
-            "L0",  # poll 6 (2.0s→cum 6.5s)
-            "L0",  # poll 7 (2.0s→cum 8.5s > 8.0 → exit)
-            "L0",  # timeout log detect
-        ]
+        def _cold_start(adb, target, scale):
+            raise TimeoutError("mock fail")
+
+        m._cold_start = _cold_start
+
         ok = m.back_recover(adb, "L1", 1.0)
         assert ok is False
-        assert adb._events == [KEYCODE_HOME]
+        assert lst.recoveries == [("L1", False)]
 
 
 class TestListener:
@@ -323,25 +246,20 @@ class TestListener:
         adb = MockAdb()
 
         # back_one(): 3 retries stuck at L2 → fallback to back_recover("L1")
-        # back_recover → advance("L1") → enter_next(L0→L1) timeout
+        # back_recover fast-forward: detect None → notify_recovery(False)
         m._detect_returns = [
             "L2",       # back_one → detect() (cur)
             "L2",       # attempt 1 → next (same → retry)
             "L2",       # attempt 2 → next (same → retry)
             "L2",       # attempt 3 → next (same → fallback)
-            # back_recover → advance → enter_next polls:
-            "L0",       # advance cur detect
-            "L0",       # enter_next guard
-            "L0",       # poll 1
-            "L0",       # poll 2
-            "L0",       # poll 3
-            "L0",       # poll 4
-            "L0",       # poll 5
-            "L0",       # poll 6
-            "L0",       # poll 7 (cum ~8.5s > 8.0 → exit)
-            "L0",       # timeout log detect
+            # back_recover → home_one
+            "L0",       # home_one cur detect (before KEYCODE_HOME)
+            "L0",       # home_one next detect (after KEYCODE_HOME)
+            # fast-forward loop
+            "L0",       # detect_layer("L1") → detect → L0 → not L1 → enter loop
+            None,       # detect() in loop → None → notify_recovery(False)
         ]
         ok = m.back_one(adb, 1.0)
-        assert ok == "L1"  # back_recover failed, returns target
+        assert ok == "L1"
         assert len(lst.recoveries) == 1
         assert lst.recoveries[0] == ("L1", False)

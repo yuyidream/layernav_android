@@ -1,10 +1,5 @@
 # layernav_android 框架 PRD
 
-> 原文件：`collector_phone_android/docs/adr/layer_model_framework_prd.md`（归档）
-> 迁移日期：2026-05-31
-
----
-
 ## §1. 设计原则
 
 1. **框架只做校验** — 框架负责层级检测和跨层前后校验，**不负责点击**。点击由 Task handler 自主执行。
@@ -12,6 +7,23 @@
 3. **原子 API** — 4 个原子操作可自由组合。
 
 ---
+4. 整体架构（职责边界）
+
+框架层 (base.py)
+├─ detect / detect_layer          ← 层级检测
+├─ back_one / home_one            ← 后退 / HOME
+├─ back_recover                   ← 冷启动恢复
+├─ poll_until_target_layer        ← 到达轮询
+├─ _do_tap(x, y, jitter_x, jitter_y) ← 层间点击（默认 adb.tap）
+└─ _call_on_layer(layer)          ← handler 路由
+
+collector 业务层
+├─ _do_tap → adb.click_xonly      ← mumdad 风控
+├─ _tap_to_layer                  ← 重试闭环（tap + poll）
+├─ _tap_row                        ← 坐标计算（badge 感知）
+├─ _on_L1 → _tap_row + _tap_to_layer(→ L2)
+└─ _on_L2 → card.click + _tap_to_layer(→ L3)
+
 
 ## §2. 层级定义
 
@@ -72,7 +84,7 @@ class LayerDef:
 | `quick` | `False`（默认）：完整业务逻辑；`True`：BACK 恢复时精简（第一个未读/第一个卡片） |
 
 **返回值**：执行业务逻辑 + 点击动作后，返回**期望到达的下一层级 key**。
-- 返回 `"L2"` → 框架立即截屏校验是否到达 L2
+- 例如返回 `"L2"` → 框架立即截屏校验是否到达 L2（动态判断，不限于 L2）
 - 返回 `None` 或当前层 key → 无需前进
 
 **handler 自己负责所有动作**（`adb.tap`、`adb.swipe` 等）。
@@ -149,37 +161,9 @@ def _recover_to_page(self, layer, page_name, adb, scale_w) -> bool:
 
 ---
 
-## §4. 框架 API —— 5 个原子操作 + 1 个目标感知检测
+## §4. 框架 API —— 4 个原子操作 + 1 个目标感知检测
 
-
-
-
-
-
----
-
-### §4.2 `enter_next(adb, scale_w, *, quick=False, max_wait_s=8.0) → bool`
-
-**从当前层级进入下一个层级**（单步）。
-**必须先检查当前层级，进入后立即检查目标层级。**
-
-```
-enter_next(*, quick, max_wait_s):
-    1. cur = detect()                                    ← ★ 先检查当前层级（guard）
-       若未知层 → 报错返回 False
-    2. result = _on_L[cur](adb, scale_w, quick=quick)   ← 调 handler（handler 执行业务+点击）
-    3. if result is None or result == cur:
-         return True                                     ← handler 说无需前进
-    4. 轮询 detect_layer(result)，间隔 0.3s→0.6s→0.9s→1.2s→1.5s→2.0s，最长 max_wait_s  ← ★ 纯自适应轮询，无固定预等待
-    5. 命中目标 → return True
-    6. 超时未到达 → return False
-```
-
-`quick` 参数透传给 handler；`max_wait_s` 控制轮询总时长（默认 8s）。
-
----
-
-### §4.3 `back_one(adb, scale_w, *, max_retries=3) → str`
+### §4.1 `back_one(adb, scale_w, *, max_retries=3) → str`
 
 **退回到上一层**（KEYCODE_BACK，重试 + 冷启动兜底）。
 
@@ -194,11 +178,11 @@ back_one(*, max_retries):
     return back_recover(target)            ← 兜底：冷启动恢复
 ```
 
-返回 BACK 后所在的层级 key。重试 *max_retries* 次仍无法退出时，自动走 :ref:`§4.7` 冷启动恢复。
+返回 BACK 后所在的层级 key。重试 *max_retries* 次仍无法退出时，自动走 :ref:`§4.4` 冷启动恢复。
 
 ---
 
-### §4.5 `home_one(adb, scale_w) → str | None`
+### §4.2 `home_one(adb, scale_w) → str | None`
 
 **从当前层级按 HOME 键回到手机主屏幕**（单步 KEYCODE_HOME）。
 
@@ -217,7 +201,7 @@ home_one():
 
 ---
 
-### §4.6 `poll_until_target_layer(adb, target_layer, scale_w, *, max_wait_s=8.0) → bool`
+### §4.3 `poll_until_target_layer(adb, target_layer, scale_w, *, max_wait_s=8.0) → bool`
 
 **自适应轮询检测目标层级**。调用方先执行 tap，再调用本方法等待目标层出现。
 
@@ -230,11 +214,11 @@ poll_until_target_layer(target_layer):
     5. 超时 → return False
 ```
 
-与 `enter_next` 复用同一个自适应轮询引擎（0.3s 初始，步长 0.3s，上限 2.0s）。**不触发 listener 通知** — 通知职责由调用方（如 `enter_next`）自行处理。
+自适应轮询引擎（0.3s 初始，步长 0.3s，上限 2.0s）。**不触发 listener 通知** — 通知职责由调用方自行处理。
 
 ---
 
-### §4.7 `back_recover(adb, target_layer, scale_w, *, target_page=None) → bool`
+### §4.4 `back_recover(adb, target_layer, scale_w, *, target_page=None) → bool`
 
 **BACK 失败后恢复**：回到手机主屏幕 → 恢复到 BACK 的目标层级（v0.4.3: 冷启动 3 次重试 + `adb reboot` 兜底）。
 
@@ -245,7 +229,9 @@ back_recover(target_layer, *, target_page):
        ├─ 尝试 2: _cold_start(L1) — 失败 → HOME 重试
        ├─ 尝试 3: _cold_start(L1) — 失败 → HOME 进入 reboot 路径
        └─ 尝试 4: _cold_start(L1, allow_reboot=True) — 失败 → return False
-    2. 循环 enter_next(quick=True) 直到 target_layer  ← 快速穿过中间层
+    2. while not detect_layer(target_layer):                  ← 快速穿过中间层
+         cur = detect()
+         _call_on_layer(cur, adb, scale_w, quick=True)
     3. _on_L[target_layer](quick=False)                 ← 目标层正常恢复
     4. if target_page is not None:
          ok = _recover_to_page(target_layer, target_page, ...)  ← 导航到子页面
@@ -263,15 +249,13 @@ back_recover(target_layer, *, target_page):
 
 ---
 
-## §6. 完整示例
+## §5. 完整示例
 
 ```
-enter_next → _on_L1                                → 正常进入 L1
-
 for group in scan_groups():
-    enter_next → _on_L1 → tap → 校验 L2
+    _call_on_layer("L1") → _on_L1 → _tap_to_layer → 校验 L2
     for card in detect_cards():
-        enter_next → _on_L2 → tap → 校验 L3
+        _call_on_layer("L2") → _on_L2 → _tap_to_layer → 校验 L3
         capture_note()
         back_one()                     → _on_L2(quick=False) 恢复
     back_one()                         → _on_L1(quick=False) 恢复
@@ -283,13 +267,13 @@ for group in scan_groups():
 L3 → back_one() 失灵 → L0
   → back_recover("L2"):
     cold-start → L1
-    enter_next(quick=True) → _on_L1(quick=True) → tap → L2
+    _call_on_layer("L1", quick=True) → _on_L1(quick=True) → _tap_to_layer → L2
     _on_L2(quick=False) → 正常恢复
 ```
 
 ---
 
-## §7. 职责边界
+## §6. 职责边界
 
 | | 框架 | Task |
 |---|------|------|
@@ -300,16 +284,15 @@ L3 → back_one() 失灵 → L0
 | `_on_Lx()` | 按层索引调用 | 覆盖：业务 + 点击 |
 | `init()` | 调用钩子 | 可选覆盖 |
 | `_recover_to_page()` | 调用钩子 | 可选覆盖 |
-| `enter_next()` | 调 handler + 校验 | — |
 | `back_one()` | KEYCODE_BACK 重试 + back_recover 兜底 | — |
 | `home_one()` | KEYCODE_HOME + detect | — |
 | `poll_until_target_layer()` | 自适应轮询检测目标层 | — |
 | `back_recover()` | 冷启动 + 快速前进 + 子页面恢复 | — |
-| `back_recover()` | 冷启动 + 快速前进 + 子页面恢复 | — |
 | `home_one(adb)` | 模块级函数 — KEYCODE_HOME + sleep | — |
-| 点击动作 | — | handler 内 `adb.tap()` |
+| `_do_tap(x,y,jitter_x,jitter_y)` | 层间点击（默认 ``adb.tap``） | 可选覆盖：防检测策略 |
+| `_tap_to_layer(x,y,target)` | — | 业务层：tap + poll 重试闭环 |
 
-### §7.1 有限状态与无限状态的分离（借鉴 Automat）
+### §6.1 有限状态与无限状态的分离（借鉴 Automat）
 
 | 有限状态（状态图可见） | 无限状态（核心数据，不进入状态图） |
 |---|---|
@@ -320,12 +303,12 @@ L3 → back_one() 失灵 → L0
 
 **设计决策**：`layers` 列表只描述页面层级结构（有限状态）。Handler 内部维护的业务状态（如 `_pick_first_unread` 的选行逻辑）属于"无限状态"，**不在层模型中体现**，由 Task 子类自行管理。这与 [Automat](https://github.com/glyph/automat) 的"Core Data"概念一脉相承——将无界数据从状态枚举中剥离，保持状态图简洁。
 
-### §7.2 守卫（Guard）与验证器（Validator）语义分离（借鉴 python-statemachine）
+### §6.2 守卫（Guard）与验证器（Validator）语义分离（借鉴 python-statemachine）
 
 | 概念 | 框架中的对应 | 说明 |
 |------|------------|------|
-| **guard**（守卫） | `enter_next` 步骤 1 的 `detect()` | 条件检查：当前层是否允许前进？ |
-| **validator**（验证器） | `enter_next` 步骤 4-5 的轮询 `detect_layer()` | 后置校验：页面是否真的跳到了目标层？ |
+| **guard**（守卫） | handler 自身的上下文校验 | 条件检查：当前层是否允许前进？（handler 返回 `None` 即拒绝） |
+| **validator**（验证器） | `_tap_to_layer` 内部的 `poll_until_target_layer()` | 后置校验：页面是否真的跳到了目标层？ |
 | **guard** | `back_one` 步骤 1 的 `detect()` | 条件检查：当前层是否允许后退？ |
 | **validator** | `back_one` 步骤 3 的 `detect()` | 后置校验：BACK 后实际在哪个层？ |
 
@@ -333,15 +316,15 @@ guard 失败 → 拒绝操作（静默或日志告警）；validator 失败 → 
 
 ---
 
-## §8. 可观测性 —— LayerListener（借鉴 python-statemachine）
+## §7. 可观测性 —— LayerListener（借鉴 python-statemachine）
 
-### §8.1 设计动机
+### §7.1 设计动机
 
 借鉴 [`python-statemachine` 的 Listener 模式](https://github.com/fgmacedo/python-statemachine)，框架提供观察者接口，解耦状态变更与外部副作用（日志、指标、告警、截图收集）。
 
 框架本身的 `LOG.debug/warning` 不面向程序消费；`LayerListener` 提供结构化事件回调。
 
-### §8.2 接口
+### §7.2 接口
 
 ```python
 class LayerListener(Protocol):
@@ -350,17 +333,15 @@ class LayerListener(Protocol):
     def on_recovery(self, target_layer: str, ok: bool) -> None: ...
 ```
 
-### §8.3 事件触发时机
+### §7.3 事件触发时机
 
 | 事件 | 触发方法 | 触发时机 |
 |------|---------|---------|
-| `on_transition(cur, next, "enter_next")` | `enter_next` | 轮询验证通过，确认到达目标层 |
-| `on_timeout(cur, target, elapsed)` | `enter_next` | 轮询超时，未到达目标层 |
 | `on_transition(cur, next, "back_one")` | `back_one` | KEYCODE_BACK 后检测到层变更 |
 | `on_transition(cur, next, "home_one")` | `home_one` | KEYCODE_HOME 后检测到层变更 |
 | `on_recovery(target, ok)` | `back_recover` | 恢复流程结束后（ok=True 成功 / ok=False 失败） |
 
-### §8.4 使用示例
+### §7.4 使用示例
 
 ```python
 from layernav_android import LayerListener
@@ -370,7 +351,7 @@ class MetricsListener:
         statsd.increment(f"layer.{method}", tags={"from": from_layer, "to": to_layer})
 
     def on_timeout(self, from_layer, target_layer, elapsed_s):
-        LOG.error("enter_next timeout: %s→%s after %.1fs", from_layer, target_layer, elapsed_s)
+        LOG.error("layer transition timeout: %s→%s after %.1fs", from_layer, target_layer, elapsed_s)
 
     def on_recovery(self, target_layer, ok):
         if not ok:
@@ -379,7 +360,7 @@ class MetricsListener:
 model.add_listener(MetricsListener())
 ```
 
-### §8.5 状态图
+### §7.5 状态图
 
 ```
 ┌──────┐  _on_L0      ┌──────┐  _on_L1      ┌──────┐  _on_L2      ┌──────┐
@@ -391,20 +372,20 @@ model.add_listener(MetricsListener())
     │   cold-start        │
     └─────────────────────┘
         back_recover:
-        HOME → cold-start → enter_next 循环 → target
+        HOME → cold-start → _call_on_layer 循环 → target
 ```
 
 > 注：`detect()` 返回 `None` 时，自动触发 `back_recover` 恢复链。
 
 ---
 
-## §9. 通用冷启动 —— `cold_start_app_from_launcher`
+## §8. 通用冷启动 —— `cold_start_app_from_launcher`
 
-### §9.1 设计动机
+### §8.1 设计动机
 
 原 `BaseLayerModel._cold_start` 各子类自行实现（`am start -n` 或 `monkey`），缺乏统一的 Dock 图标兜底、session tab 点击、force-stop 控制等能力。抽取为独立通版函数，供所有 APP 模型和外部调用方使用。
 
-### §9.2 函数签名
+### §8.2 函数签名
 
 ```python
 from layernav_android.cold_start import cold_start_app_from_launcher, dock_app_icon_coords
@@ -445,7 +426,7 @@ APP_DEFAULTS = {
 }
 ```
 
-### §9.3 冷启动路径
+### §8.3 冷启动路径
 
 ```
 1. [可选] am force-stop <package>
@@ -462,7 +443,7 @@ APP_DEFAULTS = {
 12. → 重新执行 monkey 启动 + tap session_tab
 ```
 
-### §9.4 Dock 坐标公式
+### §8.4 Dock 坐标公式
 
 ```python
 def dock_app_icon_coords(
@@ -478,7 +459,7 @@ def dock_app_icon_coords(
     return dx, dy
 ```
 
-### §9.5 使用示例
+### §8.5 使用示例
 
 ```python
 # 微信 — 最简调用（尺寸自动获取，无 session tab）
@@ -501,7 +482,7 @@ cold_start_app_from_launcher(
 )
 ```
 
-### §9.6 设计说明
+### §8.6 设计说明
 
 - **使用普通 ADB tap**（非防风控触控）：冷启动是系统级操作（桌面 Dock 图标点击），不涉及 APP 内反爬检测，使用 `AdbProtocol.tap()` 即可，方便所有系统集成。
 - **屏幕尺寸自动获取**：`screen_w` / `screen_h` / `scale_w` 不再作为参数，函数内部通过 `adb shell wm size` 自动获取。调用方只需传 `app_name` / `M` / `N` 三个核心参数即可计算出 Dock 图标坐标。
@@ -509,7 +490,7 @@ cold_start_app_from_launcher(
 - `force_stop` 通过 `adb._run(["shell", "am", "force-stop", package])` 实现，无需额外接口。
 - 返回值 `bool` 表示 `foreground_package() == package`，调用方需自行判断是否到达目标层级。
 
-### §9.7 adb reboot 兜底
+### §8.7 adb reboot 兜底
 
 当 `allow_reboot=True` 且三条启动路径全部失败时，执行系统重启作为终极恢复：
 

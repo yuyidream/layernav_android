@@ -40,7 +40,7 @@
 `detect_detail()` 一次截图返回层级 + 子页面；`back_recover` 支持 `target_page` 参数，恢复后自动精确定位到指定子页面。
 
 ✅ **完整导航原子 API**
-内置 `detect / detect_layer / enter_next / back_one / back_recover` 五原子操作，一行代码完成跨层级跳转。
+内置 `detect / detect_layer / _do_tap / back_one / back_recover` 原子操作，一行代码完成跨层级跳转。
 
 ✅ **故障自动恢复（v0.5.0 强化）**
 `detect()` 无法判定层级时 → `back_one()` 重试 3 次 BACK 失败后走 `back_recover`（HOME → 冷启动 → 前进恢复）。返回键失效、页面卡死、意外退回桌面时同样自动恢复。
@@ -215,9 +215,10 @@ dr = model.detect_detail(adb, scale_w=1.0)
 print(f"当前: {dr.layer_key} / {dr.page_name}")
 
 # 前置：确保已在 L1
-# 逐层前进到 L3（每步调用 enter_next，中间层 quick 模式）
+# 逐层前进到 L3（中间层 quick 模式）
 while not model.detect_layer(adb, scale_w, "L3"):
-    model.enter_next(adb, scale_w, quick=True)
+    cur = model.detect(adb, scale_w)
+    model._call_on_layer(cur, adb, scale_w, quick=True)
 # 目标层到达，可开始业务操作
 # 后退回 L1 的 search 子页面
 model.back_one(adb, scale_w=1.0)
@@ -232,8 +233,8 @@ model.back_one(adb, scale_w=1.0)
 | `detect(adb, scale_w) → str \| None` | 检测当前所在层级（Task 覆盖实现）。无法判定时返回 `None`，框架自动走恢复 |
 | `detect_layer(adb, scale_w, layer) → bool` | 目标感知检测：当前屏幕是否匹配指定层级（v0.5.0，Task 覆盖实现） |
 | `detect_detail(adb, scale_w) → DetectResult` | 检测层级 + 子页面名称（v0.3.0，默认调用 `detect` + `LayerDef.page_name`） |
-| `enter_next(adb, scale_w, *, quick, max_wait_s) → bool` | 单步进入下一层 ← guard + validator + 轮询 |
 | `back_one(adb, scale_w, *, max_retries=3) → str` | 退回到上一层：KEYCODE_BACK 重试 3 次，失败走 `back_recover` 冷启动兜底 |
+| `_do_tap(adb, x, y, *, jitter_x, jitter_y) → None` | 层间点击（默认 ``adb.tap``），子类覆盖加入防检测策略 |
 | `back_recover(adb, target, scale_w, *, target_page=None) → bool` | 故障恢复：HOME → 冷启动 → 快速前进 → 子页面（v0.4.3: 冷启动 3 次重试 + `adb reboot` 兜底） |
 
 **可观测**
