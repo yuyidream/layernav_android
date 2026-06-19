@@ -9,7 +9,7 @@
 
 1. **框架只做校验** — 框架负责层级检测和跨层前后校验，**不负责点击**。点击由 Task handler 自主执行。
 2. **每个层级一个 handler** — `_on_Lx(adb, scale_w, *, quick=False)` 是 Task 定义的函数，框架按当前层自动调用。
-3. **原子 API** — 4 个原子操作可自由组合，高层 `back()` 基于它们构建。
+3. **原子 API** — 4 个原子操作可自由组合。
 
 ---
 
@@ -91,7 +91,7 @@ def _on_L1(self, adb, scale_w, *, quick=False) -> str | None:
 
 ### §3.3 `detect_layer(adb, scale_w, layer) → bool`（v0.5.0）
 
-**目标感知检测**：回答"当前页面是否匹配指定的 *layer*？"与 `detect()`（"我在哪"）职责分离。导航 API（`poll_until_target_layer / back_recover / back`）使用 `detect_layer` 验证目标到达，`detect()` 仅用于"我在哪"查询。
+**目标感知检测**：回答"当前页面是否匹配指定的 *layer*？"与 `detect()`（"我在哪"）职责分离。导航 API（`poll_until_target_layer / back_recover`）使用 `detect_layer` 验证目标到达，`detect()` 仅用于"我在哪"查询。
 
 **设计意图**：`detect()` 需要匹配多层的模板，来确定自己在哪一层。 `detect_layer()` 只需要匹配目标层这一层的模板，判断是否到达目标层即可。
 
@@ -179,21 +179,22 @@ enter_next(*, quick, max_wait_s):
 
 ---
 
-### §4.3 `back_one(adb, scale_w) → str`
+### §4.3 `back_one(adb, scale_w, *, max_retries=3) → str`
 
-**从当前层级返回上一个层级**（单步 KEYCODE_BACK）。
-**必须先检查当前层级，BACK 后立即检查所在层级。**
+**退回到上一层**（KEYCODE_BACK，重试 + 冷启动兜底）。
 
 ```
-back_one():
-    1. cur = detect()              ← ★ 先检查当前层级
-    2. KEYCODE_BACK
-    3. sleep(1.0)
-    4. next = detect()             ← ★ BACK 后立即检查所在层级
-    5. return next
+back_one(*, max_retries):
+    cur = detect()                         ← ★ guard (pre-check)
+    for attempt in range(max_retries):
+        KEYCODE_BACK → sleep(1.0)
+        next = detect()                    ← ★ validator (post-check)
+        if cur != next: return next        ← 成功退了一层
+    target = one_layer_up(cur)             ← cur - 1（L3→L2, L2→L1, L1→L0）
+    return back_recover(target)            ← 兜底：冷启动恢复
 ```
 
-返回 BACK 后所在的层级 key。不验证方向——由调用方决定是否继续。
+返回 BACK 后所在的层级 key。重试 *max_retries* 次仍无法退出时，自动走 :ref:`§4.7` 冷启动恢复。
 
 ---
 
@@ -262,28 +263,6 @@ back_recover(target_layer, *, target_page):
 
 ---
 
-## §5. 框架 API —— 组合操作
-
-以下基于 4 个原子操作构建。
-
-### §5.1 `back(adb, to_layer, scale_w, *, target_page=None) → bool`
-
-从任意当前层后退到 `to_layer`。
-
-```
-back(to_layer, *, target_page):
-    cur = detect()
-    if cur is None:
-        return back_recover(to_layer, target_page=target_page)  ← 无法判定 → 直接恢复
-    if detect_layer(to_layer):
-        _on_L[to_layer](quick=False)             ← 已在目标层 → 正常恢复
-        if target_page is not None:
-            return _recover_to_page(to_layer, target_page, ...)
-        return True
-    return back_recover(to_layer, target_page=target_page)  ← 不在目标层 → 直接恢复
-```
----
-
 ## §6. 完整示例
 
 ```
@@ -294,14 +273,14 @@ for group in scan_groups():
     for card in detect_cards():
         enter_next → _on_L2 → tap → 校验 L3
         capture_note()
-        back("L2")                     → back_one → _on_L2(quick=False) 恢复
-    back("L1")                         → back_one → _on_L1(quick=False) 恢复
+        back_one()                     → _on_L2(quick=False) 恢复
+    back_one()                         → _on_L1(quick=False) 恢复
 ```
 
 ### BACK 失败恢复链
 
 ```
-L3 → back("L2") → back_one 失灵 → L0
+L3 → back_one() 失灵 → L0
   → back_recover("L2"):
     cold-start → L1
     enter_next(quick=True) → _on_L1(quick=True) → tap → L2
@@ -322,11 +301,11 @@ L3 → back("L2") → back_one 失灵 → L0
 | `init()` | 调用钩子 | 可选覆盖 |
 | `_recover_to_page()` | 调用钩子 | 可选覆盖 |
 | `enter_next()` | 调 handler + 校验 | — |
-| `back_one()` | KEYCODE_BACK + detect | — |
+| `back_one()` | KEYCODE_BACK 重试 + back_recover 兜底 | — |
 | `home_one()` | KEYCODE_HOME + detect | — |
 | `poll_until_target_layer()` | 自适应轮询检测目标层 | — |
 | `back_recover()` | 冷启动 + 快速前进 + 子页面恢复 | — |
-| `back()` | detect + back_recover | — |
+| `back_recover()` | 冷启动 + 快速前进 + 子页面恢复 | — |
 | `home_one(adb)` | 模块级函数 — KEYCODE_HOME + sleep | — |
 | 点击动作 | — | handler 内 `adb.tap()` |
 
@@ -415,7 +394,7 @@ model.add_listener(MetricsListener())
         HOME → cold-start → enter_next 循环 → target
 ```
 
-> 注：`detect()` 返回 `None` 或 `back()` 未检测到目标层时，自动触发 `back_recover` 恢复链。
+> 注：`detect()` 返回 `None` 时，自动触发 `back_recover` 恢复链。
 
 ---
 

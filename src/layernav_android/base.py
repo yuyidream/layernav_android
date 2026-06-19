@@ -9,7 +9,6 @@ Framework—Task contract:
 Framework provides:
     Atomic:   ``detect``  ``detect_layer``  ``enter_next``  ``back_one``  ``home_one``  ``back_recover``
              ``poll_until_target_layer``  (adaptive-poll after caller tap)
-    Combined: ``back``
 """
 
 from __future__ import annotations
@@ -344,22 +343,40 @@ class BaseLayerModel:
             self._notify_timeout(cur, target, elapsed)
         return ok
 
-    def back_one(self, adb: AdbProtocol, scale_w: float) -> str:
-        """Send KEYCODE_BACK once, return new layer.
+    def back_one(self, adb: AdbProtocol, scale_w: float, *, max_retries: int = 3) -> str:
+        """退回到上一层（KEYCODE_BACK，重试 + 冷启动兜底）。
 
-        1. detect current layer  ← **guard** (pre-check)
-        2. KEYCODE_BACK
-        3. sleep, detect new layer  ← **validator** (post-check)
+        1. detect() → 记录当前层 *cur*
+        2. KEYCODE_BACK → sleep 1s → detect()
+        3. cur != next → 返回 next（成功退了一层）
+        4. 否则重试，最多 *max_retries* 次
+        5. 全部失败 → :meth:`back_recover` 恢复到上一层（cur - 1）
         """
         cur = self.detect(adb, scale_w)
         logger.debug("back_one: from %s", cur)
-        adb.key_event(KEYCODE_BACK)
-        time.sleep(1.0)
-        next_cur = self.detect(adb, scale_w)
-        logger.debug("back_one: %s → %s", cur, next_cur)
-        if cur != next_cur:
-            self._notify_transition(cur, next_cur, "back_one")
-        return next_cur
+
+        for attempt in range(max_retries):
+            adb.key_event(KEYCODE_BACK)
+            time.sleep(1.0)
+            next_cur = self.detect(adb, scale_w)
+            logger.debug("back_one: attempt %d/%d  %s → %s", attempt + 1, max_retries, cur, next_cur)
+            if cur != next_cur:
+                if cur is not None and next_cur is not None:
+                    self._notify_transition(cur, next_cur, "back_one")
+                return next_cur
+
+        # 全部重试失败 → 冷启动兜底
+        ci = self._layer_index(cur) if cur is not None else -1
+        if ci > 0:
+            target = self.layers[ci - 1].key
+        else:
+            target = "L1"
+        logger.warning(
+            "back_one: %d attempts failed (stuck at %s) — falling back to back_recover(%s)",
+            max_retries, cur, target,
+        )
+        self.back_recover(adb, target, scale_w)
+        return target
 
     def home_one(
         self, adb: AdbProtocol, scale_w: float,
@@ -469,24 +486,4 @@ class BaseLayerModel:
         self._notify_recovery(target_layer, result)
         return result
 
-    # ── Combined API ──────────────────────────────────────────────────────────
-
-    def back(
-        self, adb: AdbProtocol, to_layer: str, scale_w: float, *,
-        target_page: str | None = None,
-    ) -> bool:
-        """Retreat to *to_layer*, relying on :meth:`detect_layer` for arrival
-        confirmation.  If the current layer cannot be determined
-        (:meth:`detect` returns ``None``), falls through to
-        :meth:`back_recover` immediately.
-        """
-        cur = self.detect(adb, scale_w)
-        if cur is None:
-            logger.warning("back: detect() returned None — falling back to back_recover")
-            return self.back_recover(adb, to_layer, scale_w, target_page=target_page)
-        if self.detect_layer(adb, scale_w, to_layer):
-            self._call_on_layer(to_layer, adb, scale_w, quick=False)
-            if target_page is not None:
-                return self._recover_to_page(to_layer, target_page, adb, scale_w)
-            return True
-        return self.back_recover(adb, to_layer, scale_w, target_page=target_page)
+    # ── internal helpers ────────────────────────────────────────────────────────

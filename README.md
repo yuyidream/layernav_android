@@ -37,13 +37,13 @@
 `detect()` 负责"我在哪"（返回 `str | None`），`detect_layer(target)` 负责"到达目标了吗"（返回 `bool`）。导航 API 全部使用 `detect_layer` 做目标验证，`detect()` 无法判定时（返回 `None`）自动回退到 `back_recover`。
 
 ✅ **同层多页面导航（v0.3.0）**
-`detect_detail()` 一次截图返回层级 + 子页面；`back_recover` / `back` 支持 `target_page` 参数，恢复后自动精确定位到指定子页面。
+`detect_detail()` 一次截图返回层级 + 子页面；`back_recover` 支持 `target_page` 参数，恢复后自动精确定位到指定子页面。
 
 ✅ **完整导航原子 API**
-内置 `detect / detect_layer / enter_next / back_one / back_recover` 五原子操作 + `back` 组合操作，一行代码完成跨层级跳转。
+内置 `detect / detect_layer / enter_next / back_one / back_recover` 五原子操作，一行代码完成跨层级跳转。
 
 ✅ **故障自动恢复（v0.5.0 强化）**
-`detect()` 无法判定层级时 → `back()` 直接走 `back_recover`（HOME → 冷启动 → 前进恢复），不再盲试 BACK。返回键失效、页面卡死、意外退回桌面时同样自动恢复。
+`detect()` 无法判定层级时 → `back_one()` 重试 3 次 BACK 失败后走 `back_recover`（HOME → 冷启动 → 前进恢复）。返回键失效、页面卡死、意外退回桌面时同样自动恢复。
 
 ✅ **Quick 快速模式**
 专为恢复场景设计，handlers 收到 `quick=True` 时可精简业务逻辑（如选第一个未读），提升导航速度。
@@ -95,7 +95,7 @@ layers = [
 |------|---------|----------|
 | 状态检测 | 调用 `detect()` / `detect_detail()`、校验结果 | 实现截图/识别逻辑 |
 | 页面动作 | 流程调度、等待、重试 | 实现 `_on_Lx` 点击/滑动等业务动作 |
-| 导航逻辑 | `back` / 恢复 | 无 |
+| 导航逻辑 | `back_one` + `back_recover` / 恢复 | 无 |
 | 子页面导航 | `detect_detail` / `_recover_to_page` | 无（框架提供 `target_page` 路由） |
 | 点击 | **不负责** — 框架不 `tap` | handler 内 `adb.tap()` |
 
@@ -220,7 +220,7 @@ while not model.detect_layer(adb, scale_w, "L3"):
     model.enter_next(adb, scale_w, quick=True)
 # 目标层到达，可开始业务操作
 # 后退回 L1 的 search 子页面
-model.back(adb, to_layer="L1", scale_w=1.0, target_page="search")
+model.back_one(adb, scale_w=1.0)
 ```
 
 ### 3. 核心 API
@@ -233,14 +233,8 @@ model.back(adb, to_layer="L1", scale_w=1.0, target_page="search")
 | `detect_layer(adb, scale_w, layer) → bool` | 目标感知检测：当前屏幕是否匹配指定层级（v0.5.0，Task 覆盖实现） |
 | `detect_detail(adb, scale_w) → DetectResult` | 检测层级 + 子页面名称（v0.3.0，默认调用 `detect` + `LayerDef.page_name`） |
 | `enter_next(adb, scale_w, *, quick, max_wait_s) → bool` | 单步进入下一层 ← guard + validator + 轮询 |
-| `back_one(adb, scale_w) → str` | 单步 `KEYCODE_BACK`，返回新层级 |
+| `back_one(adb, scale_w, *, max_retries=3) → str` | 退回到上一层：KEYCODE_BACK 重试 3 次，失败走 `back_recover` 冷启动兜底 |
 | `back_recover(adb, target, scale_w, *, target_page=None) → bool` | 故障恢复：HOME → 冷启动 → 快速前进 → 子页面（v0.4.3: 冷启动 3 次重试 + `adb reboot` 兜底） |
-
-**组合操作**
-
-| 方法 | 说明 |
-|------|------|
-| `back(adb, to_layer, scale_w, *, target_page=None) → bool` | 后退至目标层（v0.5.0: 直接用 `detect_layer` 验证，`detect()` 返回 `None` 时直接 `back_recover`）**（v0.3.0: 支持 `target_page`）** |
 
 **可观测**
 
@@ -315,7 +309,7 @@ ok = cold_start_app_from_launcher(
 | 同层多页面导航 | ✅ `detect_detail` + `_recover_to_page` | ❌ 需手动分支 |
 | 操作后页面校验 | ✅ 闭环 guard + validator | ❌ 仅执行动作，不校验结果 |
 | 自动后退恢复 | ✅ 3 次重试 + 冷启动兜底 | ❌ 需手动编写重试逻辑 |
-| 层级穿越 API | ✅ `back` | ❌ 仅基础点击/返回 |
+| 层级穿越 API | ✅ `back_one` + `back_recover` | ❌ 仅基础点击/返回 |
 | 可观测监听器 | ✅ `LayerListener` 事件回调 | ❌ 需自行埋点 |
 | ADB 解耦 | ✅ `AdbProtocol` 接口抽象 | ⚠️ 部分耦合 |
 
