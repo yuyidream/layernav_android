@@ -42,6 +42,9 @@
 ✅ **完整导航原子 API**
 内置 `detect / detect_layer / _do_tap / back_one / back_recover` 原子操作，一行代码完成跨层级跳转。
 
+✅ **防检测点击（v0.5.3）**
+`_do_tap` 提供可覆盖的层间点击入口，子类注入防风控策略（如 `mumdad.click_xonly` 的 x 轴随机抖动），框架只提供默认 `adb.tap`，不预设防护行为。
+
 ✅ **故障自动恢复（v0.5.0 强化）**
 `detect()` 无法判定层级时 → `back_one()` 重试 3 次 BACK 失败后走 `back_recover`（HOME → 冷启动 → 前进恢复）。返回键失效、页面卡死、意外退回桌面时同样自动恢复。
 
@@ -236,6 +239,20 @@ model.back_one(adb, scale_w=1.0)
 | `back_one(adb, scale_w, *, max_retries=3) → str` | 退回到上一层：KEYCODE_BACK 重试 3 次，失败走 `back_recover` 冷启动兜底 |
 | `_do_tap(adb, x, y, *, jitter_x, jitter_y) → None` | 层间点击（默认 ``adb.tap``），子类覆盖加入防检测策略 |
 | `back_recover(adb, target, scale_w, *, target_page=None) → bool` | 故障恢复：HOME → 冷启动 → 快速前进 → 子页面（v0.4.3: 冷启动 3 次重试 + `adb reboot` 兜底） |
+
+**`_do_tap` 使用示例**
+
+```python
+# 框架默认（base.py）— 普通 ADB tap
+def _do_tap(self, adb, click_x, click_y, jitter_x=0, jitter_y=0):
+    adb.tap(click_x, click_y)
+
+# 业务覆盖（子类）— mumdad 风控点击
+def _do_tap(self, adb, click_x, click_y, jitter_x=0, jitter_y=0):
+    adb.click_xonly(click_x, click_y, jitter_x=jitter_x, jitter_y=jitter_y)
+```
+
+`jitter_x` / `jitter_y` 由调用方按场景传入（如 L1→L2 宽抖动 20px），子类内部策略自由替换。
 
 **可观测**
 

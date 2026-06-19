@@ -4,7 +4,7 @@
 
 1. **框架只做校验** — 框架负责层级检测和跨层前后校验，**不负责点击**。点击由 Task handler 自主执行。
 2. **每个层级一个 handler** — `_on_Lx(adb, scale_w, *, quick=False)` 是 Task 定义的函数，框架按当前层自动调用。
-3. **原子 API** — 4 个原子操作可自由组合。
+3. **原子 API** — 5 个原子操作可自由组合。
 
 ---
 4. 整体架构（职责边界）
@@ -161,7 +161,7 @@ def _recover_to_page(self, layer, page_name, adb, scale_w) -> bool:
 
 ---
 
-## §4. 框架 API —— 4 个原子操作 + 1 个目标感知检测
+## §4. 框架 API —— 5 个原子操作 + 1 个目标感知检测
 
 ### §4.1 `back_one(adb, scale_w, *, max_retries=3) → str`
 
@@ -246,6 +246,36 @@ back_recover(target_layer, *, target_page):
 | `target_page` | 同 v0.3.0，恢复后自动定位到子页面 | — |
 
 `allow_reboot=True` 时，`cold_start_app_from_launcher` 在 monkey / am start / Dock icon 三条路径全部失败后，执行 `adb reboot` → `_wait_for_boot_completed` → 重新 monkey 启动。重启耗时 60–120s，要求设备无锁屏。
+
+---
+
+### §4.5 `_do_tap(adb, click_x, click_y, *, jitter_x=0, jitter_y=0) → None`
+
+**层间点击**（可覆盖）。框架提供默认的 `adb.tap()` 实现，子类可覆盖加入防检测策略。
+
+```
+_do_tap(x, y, *, jitter_x, jitter_y):
+    adb.tap(x, y)          ← 默认实现（框架层）
+```
+
+| 参数 | 说明 |
+|------|------|
+| `click_x`, `click_y` | 点击坐标 |
+| `jitter_x`, `jitter_y` | 抖动范围（px），由调用方按场景传入。默认 0，子类内部策略自由替换 |
+
+**设计意图**：层间跳转的 tap 由框架提供统一入口，防风控策略（如 `mumdad.click_xonly` 的 x 轴随机抖动）通过子类覆盖注入，不污染框架核心逻辑。
+
+```python
+# 框架默认（base.py）
+def _do_tap(self, adb, click_x, click_y, jitter_x=0, jitter_y=0):
+    adb.tap(click_x, click_y)
+
+# 业务覆盖（collector_layer_model.py）
+def _do_tap(self, adb, click_x, click_y, jitter_x=0, jitter_y=0):
+    adb.click_xonly(click_x, click_y, jitter_x=jitter_x, jitter_y=jitter_y)
+```
+
+调用约定：handler 和 `_tap_to_layer` 通过 `_do_tap` 执行层间点击，`jitter` 参数由调用方按场景传入（如 L1→L2 宽抖动 20px），框架不预设任何防风控行为。
 
 ---
 
