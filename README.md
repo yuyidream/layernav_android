@@ -37,13 +37,13 @@
 `detect()` 负责"我在哪"（返回 `str | None`），`detect_layer(target)` 负责"到达目标了吗"（返回 `bool`）。导航 API 全部使用 `detect_layer` 做目标验证，`detect()` 无法判定时（返回 `None`）自动回退到 `back_recover`。
 
 ✅ **同层多页面导航（v0.3.0）**
-`detect_detail()` 一次截图返回层级 + 子页面；`back_recover` / `back` / `restore` 支持 `target_page` 参数，恢复后自动精确定位到指定子页面。
+`detect_detail()` 一次截图返回层级 + 子页面；`back_recover` / `back` 支持 `target_page` 参数，恢复后自动精确定位到指定子页面。
 
 ✅ **完整导航原子 API**
-内置 `detect / detect_layer / enter_next / back_one / back_recover` 五原子操作 + `advance / back / restore` 三组合操作，一行代码完成跨层级跳转。
+内置 `detect / detect_layer / enter_next / back_one / back_recover` 五原子操作 + `back` 组合操作，一行代码完成跨层级跳转。
 
 ✅ **故障自动恢复（v0.5.0 强化）**
-`detect()` 无法判定层级时 → `back()` / `restore()` 直接走 `back_recover`（HOME → 冷启动 → 前进恢复），不再盲试 BACK。返回键失效、页面卡死、意外退回桌面时同样自动恢复。
+`detect()` 无法判定层级时 → `back()` 直接走 `back_recover`（HOME → 冷启动 → 前进恢复），不再盲试 BACK。返回键失效、页面卡死、意外退回桌面时同样自动恢复。
 
 ✅ **Quick 快速模式**
 专为恢复场景设计，handlers 收到 `quick=True` 时可精简业务逻辑（如选第一个未读），提升导航速度。
@@ -86,7 +86,6 @@ layers = [
 | 能力 | 方法 | 说明 |
 |------|------|------|
 | 子页面检测 | `detect_detail() → DetectResult` | 返回 `(layer_key, page_name)` |
-| 子页面恢复 | `restore(..., target_page="chat_list")` | 到达目标层后调用 `_recover_to_page` |
 | Tab 切换（L1） | `WeChatGroupLayerModel._recover_to_page` | 框架自动计算底部 tab 坐标并点击 |
 | 校验型（L2/L3） | `detect_detail` 验证 | 无需额外操作，校验 page_name 即可 |
 
@@ -96,7 +95,7 @@ layers = [
 |------|---------|----------|
 | 状态检测 | 调用 `detect()` / `detect_detail()`、校验结果 | 实现截图/识别逻辑 |
 | 页面动作 | 流程调度、等待、重试 | 实现 `_on_Lx` 点击/滑动等业务动作 |
-| 导航逻辑 | `advance` / `back` / `restore` / 恢复 | 无 |
+| 导航逻辑 | `back` / 恢复 | 无 |
 | 子页面导航 | `detect_detail` / `_recover_to_page` | 无（框架提供 `target_page` 路由） |
 | 点击 | **不负责** — 框架不 `tap` | handler 内 `adb.tap()` |
 
@@ -215,10 +214,11 @@ adb = get_adb_client()
 dr = model.detect_detail(adb, scale_w=1.0)
 print(f"当前: {dr.layer_key} / {dr.page_name}")
 
-# 智能恢复到 L1 的 home 子页面
-model.restore(adb, target_layer="L1", scale_w=1.0, target_page="home")
-# 逐层前进到 L3
-model.advance(adb, target_layer="L3", scale_w=1.0)
+# 前置：确保已在 L1
+# 逐层前进到 L3（每步调用 enter_next，中间层 quick 模式）
+while not model.detect_layer(adb, scale_w, "L3"):
+    model.enter_next(adb, scale_w, quick=True)
+# 目标层到达，可开始业务操作
 # 后退回 L1 的 search 子页面
 model.back(adb, to_layer="L1", scale_w=1.0, target_page="search")
 ```
@@ -241,8 +241,6 @@ model.back(adb, to_layer="L1", scale_w=1.0, target_page="search")
 | 方法 | 说明 |
 |------|------|
 | `back(adb, to_layer, scale_w, *, target_page=None) → bool` | 后退至目标层（v0.5.0: 直接用 `detect_layer` 验证，`detect()` 返回 `None` 时直接 `back_recover`）**（v0.3.0: 支持 `target_page`）** |
-| `advance(adb, target, scale_w, *, quick, max_wait_s) → bool` | 逐层前进至目标（v0.5.0: 用 `detect_layer` 验证到达；目标层 always `quick=False`） |
-| `restore(adb, target, scale_w, *, target_page=None) → bool` | 智能判断方向，从任意位置恢复至目标 + 子页面（v0.5.0: `detect()` 返回 `None` 时直接 `back_recover`）**（v0.3.0: 支持 `target_page`）** |
 
 **可观测**
 
@@ -317,7 +315,7 @@ ok = cold_start_app_from_launcher(
 | 同层多页面导航 | ✅ `detect_detail` + `_recover_to_page` | ❌ 需手动分支 |
 | 操作后页面校验 | ✅ 闭环 guard + validator | ❌ 仅执行动作，不校验结果 |
 | 自动后退恢复 | ✅ 3 次重试 + 冷启动兜底 | ❌ 需手动编写重试逻辑 |
-| 层级穿越 API | ✅ `advance` / `back` / `restore` | ❌ 仅基础点击/返回 |
+| 层级穿越 API | ✅ `back` | ❌ 仅基础点击/返回 |
 | 可观测监听器 | ✅ `LayerListener` 事件回调 | ❌ 需自行埋点 |
 | ADB 解耦 | ✅ `AdbProtocol` 接口抽象 | ⚠️ 部分耦合 |
 

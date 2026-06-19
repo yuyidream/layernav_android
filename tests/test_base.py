@@ -277,64 +277,6 @@ class TestBack:
         assert ok is True
 
 
-class TestAdvance:
-    def test_advance_steps_until_target(self):
-        m = _TestModel()
-        adb = MockAdb()
-        m._detect_returns = [
-            "L1", "L1", "L2", "L2", "L2", "L3", "L3", "L3",
-        ]
-        ok = m.advance(adb, "L3", 1.0)
-        assert ok is True
-
-    def test_advance_calls_target_handler_with_quick_false(self):
-        m = _TestModel()
-        adb = MockAdb()
-        calls = []
-
-        def _on_L3_track(*args, **kwargs):
-            calls.append(kwargs.get("quick"))
-            return None
-        m._on_L3 = _on_L3_track
-        m._detect_returns = ["L3", "L3"]  # detect() + detect_layer peek
-
-        m.advance(adb, "L3", 1.0, quick=True)
-        assert calls == [False]
-
-    def test_advance_stops_on_enter_next_failure(self):
-        m = _TestModel()
-        adb = MockAdb()
-        m._detect_returns = ["L1", "L1", "L1", "L1", "L1"]
-
-        ok = m.advance(adb, "L2", 1.0, max_wait_s=1.0)
-        assert ok is False
-
-
-class TestRestore:
-    def test_restore_backs_when_above(self):
-        m = _TestModel()
-        adb = MockAdb()
-        m._detect_returns = ["L3", "L2", "L1", "L1", "L1"]
-        ok = m.restore(adb, "L1", 1.0)
-        assert ok is True
-
-    def test_restore_advances_when_below(self):
-        m = _TestModel()
-        adb = MockAdb()
-        # restore: detect + detect_layer → 2
-        # advance: detect + detect_layer → 2
-        # enter_next: detect → 1, poll: detect + detect_layer → 2
-        # advance loop2: detect + detect_layer → 2 = 9 total
-        m._detect_returns = ["L0", "L0", "L1", "L1", "L1", "L1", "L2", "L2", "L2"]
-        ok = m.restore(adb, "L2", 1.0)
-        assert ok is True
-
-    def test_restore_returns_true_when_at_target(self):
-        m = _TestModel()
-        adb = MockAdb()
-        m._detect_returns = ["L2", "L2"]  # detect() + detect_layer peek
-        ok = m.restore(adb, "L2", 1.0)
-        assert ok is True
 
 
 class TestBackRecover:

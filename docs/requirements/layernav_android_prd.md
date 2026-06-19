@@ -9,7 +9,7 @@
 
 1. **框架只做校验** — 框架负责层级检测和跨层前后校验，**不负责点击**。点击由 Task handler 自主执行。
 2. **每个层级一个 handler** — `_on_Lx(adb, scale_w, *, quick=False)` 是 Task 定义的函数，框架按当前层自动调用。
-3. **原子 API** — 4 个原子操作可自由组合，高层 `back()` / `advance()` / `restore()` 基于它们构建。
+3. **原子 API** — 4 个原子操作可自由组合，高层 `back()` 基于它们构建。
 
 ---
 
@@ -91,7 +91,9 @@ def _on_L1(self, adb, scale_w, *, quick=False) -> str | None:
 
 ### §3.3 `detect_layer(adb, scale_w, layer) → bool`（v0.5.0）
 
-**目标感知检测**：回答"当前页面是否匹配指定的 *layer*？"与 `detect()`（"我在哪"）职责分离。导航 API 使用 `detect_layer` 验证目标到达。
+**目标感知检测**：回答"当前页面是否匹配指定的 *layer*？"与 `detect()`（"我在哪"）职责分离。导航 API（`poll_until_target_layer / back_recover / back`）使用 `detect_layer` 验证目标到达，`detect()` 仅用于"我在哪"查询。
+
+**设计意图**：`detect()` 需要匹配多层的模板，来确定自己在哪一层。 `detect_layer()` 只需要匹配目标层这一层的模板，判断是否到达目标层即可。
 
 ```python
 def detect_layer(self, adb, scale_w, layer: str) -> bool:
@@ -109,7 +111,7 @@ def detect_layer(self, adb, scale_w, layer: str) -> bool:
     return False
 ```
 
-**设计意图**：`detect()` 与 `detect_layer()` 可以因检测精度差异而给出不同结果——`detect_layer(target)` 可加入额外的否定确认条件（如 L1 检测时临时排除 L2 特征），这些条件不影响 `detect()` 的"我在哪"语义。
+
 
 ### §3.4 `detect_detail(adb, scale_w) → DetectResult`
 
@@ -133,7 +135,7 @@ def detect_detail(self, adb, scale_w) -> DetectResult:
 
 ### §3.5 `_recover_to_page(layer, page_name, adb, scale_w) → bool`
 
-**到达目标层后导航到指定子页面**。由 `back_recover`（及 `restore` 在已在目标层但子页面不符时）调用。默认实现：调用 `detect_detail()` 校验 `page_name` 是否匹配；子类可覆盖为具体导航动作（如 L1 切换到「微信」Tab）。
+**到达目标层后导航到指定子页面**。由 `back_recover` 调用。默认实现：调用 `detect_detail()` 校验 `page_name` 是否匹配；子类可覆盖为具体导航动作（如 L1 切换到「微信」Tab）。
 
 ```python
 def _recover_to_page(self, layer, page_name, adb, scale_w) -> bool:
@@ -149,15 +151,10 @@ def _recover_to_page(self, layer, page_name, adb, scale_w) -> bool:
 
 ## §4. 框架 API —— 5 个原子操作 + 1 个目标感知检测
 
-### §4.1 `detect(adb, scale_w) → str | None`
 
-**查询当前所在层级**。Task 覆盖。无法判定时返回 `None`。
 
-### §4.1b `detect_layer(adb, scale_w, layer) → bool`（v0.5.0）
 
-**目标感知检测**：当前屏幕是否匹配指定 *layer*。Task 覆盖。
 
-导航 API（`poll_until_target_layer / back_recover / advance / back / restore`）使用 `detect_layer` 验证目标到达，`detect()` 仅用于"我在哪"查询。
 
 ---
 
@@ -248,7 +245,7 @@ back_recover(target_layer, *, target_page):
        ├─ 尝试 3: _cold_start(L1) — 失败 → HOME 进入 reboot 路径
        └─ 尝试 4: _cold_start(L1, allow_reboot=True) — 失败 → return False
     2. 循环 enter_next(quick=True) 直到 target_layer  ← 快速穿过中间层
-    3. _on_L[target_layer](quick=False)                 ← 正常恢复业务（advance 内部完成）
+    3. _on_L[target_layer](quick=False)                 ← 目标层正常恢复
     4. if target_page is not None:
          ok = _recover_to_page(target_layer, target_page, ...)  ← 导航到子页面
          if not ok: return False
@@ -285,61 +282,17 @@ back(to_layer, *, target_page):
         return True
     return back_recover(to_layer, target_page=target_page)  ← 不在目标层 → 直接恢复
 ```
-
-### §5.2 `advance(adb, target_layer, scale_w, *, quick=False, max_wait_s=8.0) → bool`
-
-从当前层逐层前进到 `target_layer`。中间层使用 `quick` 模式，到达目标层时始终 `quick=False`。
-
-```
-advance(target, *, quick, max_wait_s):
-    while True:
-        cur = detect()                            ← §4.1
-        if cur is not None and detect_layer(target):
-            _on_L[target](quick=False)            ← 到达 → 正常执行
-            return True
-        if layer_index(cur) < 0:                  ← 未知层
-            _cold_start(adb, target_layer, ...)   ← 冷启动恢复
-            continue
-        ok = enter_next(quick=quick, max_wait_s=max_wait_s)  ← §4.2
-        if not ok:
-            return False
-```
-
-### §5.3 `restore(adb, target_layer, scale_w, *, target_page=None) → bool`
-
-从任意位置恢复到 `target_layer`（自动判断方向）。
-
-```
-restore(target, *, target_page):
-    cur = detect()
-    if cur is None:
-        return back_recover(target, target_page=target_page)  ← 无法判定 → 直接恢复
-    if detect_layer(target):
-        if target_page is not None:
-            return _recover_to_page(target, target_page, ...)  ← 已在目标层，只需修正子页面
-        return True
-    if layer_index(cur) > layer_index(target):
-        return back(target, target_page=target_page)           ← 在上面 → 退
-    else:
-        ok = advance(target, quick=True)                       ← 在下面 → 快速进
-        if not ok:
-            return False
-        if target_page is not None:
-            return _recover_to_page(target, target_page, ...)
-        return True
-```
-
 ---
 
 ## §6. 完整示例
 
 ```
-restore("L1")                          → _on_L1(quick=False) 正常
+enter_next → _on_L1                                → 正常进入 L1
 
 for group in scan_groups():
-    advance("L2")                      → enter_next → _on_L1 → tap → 校验 L2
+    enter_next → _on_L1 → tap → 校验 L2
     for card in detect_cards():
-        advance("L3")                  → enter_next → _on_L2 → tap → 校验 L3
+        enter_next → _on_L2 → tap → 校验 L3
         capture_note()
         back("L2")                     → back_one → _on_L2(quick=False) 恢复
     back("L1")                         → back_one → _on_L1(quick=False) 恢复
@@ -374,8 +327,6 @@ L3 → back("L2") → back_one 失灵 → L0
 | `poll_until_target_layer()` | 自适应轮询检测目标层 | — |
 | `back_recover()` | 冷启动 + 快速前进 + 子页面恢复 | — |
 | `back()` | detect + back_recover | — |
-| `advance()` | 循环 enter_next + 未知层冷启动 | — |
-| `restore()` | 方向判断 + 调 back/advance | — |
 | `home_one(adb)` | 模块级函数 — KEYCODE_HOME + sleep | — |
 | 点击动作 | — | handler 内 `adb.tap()` |
 
@@ -461,10 +412,10 @@ model.add_listener(MetricsListener())
     │   cold-start        │
     └─────────────────────┘
         back_recover:
-        HOME → cold-start → advance(quick=True)
+        HOME → cold-start → enter_next 循环 → target
 ```
 
-> 注：`detect()` 返回 `None` 或 `back()` 未检测到目标层时，自动触发 `back_recover` 恢复链。`advance` / `restore` / `back` 是上述原子操作的组合。
+> 注：`detect()` 返回 `None` 或 `back()` 未检测到目标层时，自动触发 `back_recover` 恢复链。
 
 ---
 

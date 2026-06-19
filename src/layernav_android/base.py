@@ -9,7 +9,7 @@ Framework—Task contract:
 Framework provides:
     Atomic:   ``detect``  ``detect_layer``  ``enter_next``  ``back_one``  ``home_one``  ``back_recover``
              ``poll_until_target_layer``  (adaptive-poll after caller tap)
-    Combined: ``back``    ``advance``     ``restore``
+    Combined: ``back``
 """
 
 from __future__ import annotations
@@ -210,8 +210,7 @@ class BaseLayerModel:
     ) -> bool:
         """Navigate to a specific sub-page within *layer* after recovery.
 
-        Called by :meth:`back_recover` (and :meth:`restore` when already
-        on the target layer) after reaching the correct layer.  Override
+        Called by :meth:`back_recover` after reaching the correct layer.  Override
         to handle sub-page navigation (e.g. switching tabs within L1).
 
         Default: verify current page via :meth:`detect_detail` — returns
@@ -334,13 +333,15 @@ class BaseLayerModel:
         if target is None or target == cur:
             return True
 
+        poll_start = time.monotonic()
         ok = self.poll_until_target_layer(
             adb, target, scale_w, max_wait_s=max_wait_s,
         )
         if ok:
             self._notify_transition(cur, target, "enter_next")
         else:
-            self._notify_timeout(cur, target, max_wait_s)
+            elapsed = time.monotonic() - poll_start
+            self._notify_timeout(cur, target, elapsed)
         return ok
 
     def back_one(self, adb: AdbProtocol, scale_w: float) -> str:
@@ -356,7 +357,8 @@ class BaseLayerModel:
         time.sleep(1.0)
         next_cur = self.detect(adb, scale_w)
         logger.debug("back_one: %s → %s", cur, next_cur)
-        self._notify_transition(cur, next_cur, "back_one")
+        if cur != next_cur:
+            self._notify_transition(cur, next_cur, "back_one")
         return next_cur
 
     def home_one(
@@ -373,7 +375,8 @@ class BaseLayerModel:
         time.sleep(0.8)
         next_cur = self.detect(adb, scale_w)
         logger.debug("home_one: %s → %s", cur, next_cur)
-        self._notify_transition(cur, next_cur, "home_one")
+        if cur != next_cur:
+            self._notify_transition(cur, next_cur, "home_one")
         return next_cur
 
     def back_recover(
@@ -435,10 +438,20 @@ class BaseLayerModel:
                     self._notify_recovery(target_layer, False)
                     return False
 
-        ok = self.advance(adb, target_layer, scale_w, quick=True)
-        if not ok:
-            self._notify_recovery(target_layer, False)
-            return False
+        # ── fast-forward to target_layer (PRD §4.7 step 2-3) ──
+        while not self.detect_layer(adb, scale_w, target_layer):
+            cur = self.detect(adb, scale_w)
+            if cur is None or self._layer_index(cur) < 0:
+                logger.error(
+                    "back_recover: lost after cold-start (cur=%s)", cur,
+                )
+                self._notify_recovery(target_layer, False)
+                return False
+            ok = self.enter_next(adb, scale_w, quick=True)
+            if not ok:
+                self._notify_recovery(target_layer, False)
+                return False
+        self._call_on_layer(target_layer, adb, scale_w, quick=False)
 
         if target_page is not None:
             page_ok = self._recover_to_page(
@@ -477,62 +490,3 @@ class BaseLayerModel:
                 return self._recover_to_page(to_layer, target_page, adb, scale_w)
             return True
         return self.back_recover(adb, to_layer, scale_w, target_page=target_page)
-
-    def advance(
-        self, adb: AdbProtocol, target_layer: str, scale_w: float, *,
-        quick: bool = False,
-        max_wait_s: float = 8.0,
-    ) -> bool:
-        """Advance layer-by-layer to *target_layer*.
-
-        Uses :meth:`enter_next` for each step.  *quick* is forwarded to
-        intermediate layers' handlers.  At the target layer, handler is
-        always called with ``quick=False``.
-        """
-        while True:
-            cur = self.detect(adb, scale_w)
-            if cur is not None and self.detect_layer(adb, scale_w, target_layer):
-                self._call_on_layer(target_layer, adb, scale_w, quick=False)
-                return True
-            if self._layer_index(cur) < 0:
-                logger.warning(
-                    "advance: unknown layer %s, cold-starting → %s",
-                    cur, target_layer,
-                )
-                self._cold_start(adb, target_layer, scale_w)
-                continue
-            ok = self.enter_next(adb, scale_w, quick=quick, max_wait_s=max_wait_s)
-            if not ok:
-                return False
-
-    def restore(
-        self, adb: AdbProtocol, target_layer: str, scale_w: float, *,
-        target_page: str | None = None,
-    ) -> bool:
-        """Restore to *target_layer* (and optionally *target_page*) from any position.
-
-        If already on *target_layer* but page mismatch, calls
-        :meth:`_recover_to_page` without cold-start.
-
-        If the current layer cannot be determined (:meth:`detect` returns
-        ``None``), falls through to :meth:`back_recover`.
-        """
-        cur = self.detect(adb, scale_w)
-        if cur is None:
-            logger.warning("restore: detect() returned None — falling back to back_recover")
-            return self.back_recover(adb, target_layer, scale_w, target_page=target_page)
-        if self.detect_layer(adb, scale_w, target_layer):
-            if target_page is not None:
-                return self._recover_to_page(target_layer, target_page, adb, scale_w)
-            return True
-        ci = self._layer_index(cur)
-        ti = self._layer_index(target_layer)
-        if ci > ti:
-            return self.back(adb, target_layer, scale_w, target_page=target_page)
-        else:
-            ok = self.advance(adb, target_layer, scale_w, quick=True)
-            if not ok:
-                return False
-            if target_page is not None:
-                return self._recover_to_page(target_layer, target_page, adb, scale_w)
-            return True
