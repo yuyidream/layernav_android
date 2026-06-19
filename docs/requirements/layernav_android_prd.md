@@ -251,6 +251,8 @@ back_recover(target_layer, *, target_page):
 
 ### §4.5 `_do_tap(adb, click_x, click_y, *, jitter_x=0, jitter_y=0) → None`
 
+因为项目有可能要使用防风控点击，点击功能必须单独拆分出来作为一个函数。
+
 **层间点击**（可覆盖）。框架提供默认的 `adb.tap()` 实现，子类可覆盖加入防检测策略。
 
 ```
