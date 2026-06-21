@@ -257,7 +257,9 @@ class TestListener:
             "L0",       # home_one next detect (after KEYCODE_HOME)
             # fast-forward loop
             "L0",       # detect_layer("L1") → detect → L0 → not L1 → enter loop
-            None,       # detect() in loop → None → notify_recovery(False)
+            None,       # detect() in loop → None → retry 1
+            None,       # detect() retry 1 → None
+            None,       # detect() retry 2 → None → for-else fail
         ]
         ok = m.back_one(adb, 1.0)
         assert ok == "L1"

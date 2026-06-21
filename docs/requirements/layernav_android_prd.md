@@ -417,6 +417,10 @@ model.add_listener(MetricsListener())
 
 原 `BaseLayerModel._cold_start` 各子类自行实现（`am start -n` 或 `monkey`），缺乏统一的 Dock 图标兜底、session tab 点击、force-stop 控制等能力。抽取为独立通版函数，供所有 APP 模型和外部调用方使用。
 
+
+说明：由于异常情况强制冷启动微信时，只能启动默认的主程序，所以安卓机能双开微信最好也只开一个（或者晚上切另一个账号）！！记录到文档
+
+
 ### §8.2 函数签名
 
 ```python

@@ -428,17 +428,24 @@ class BaseLayerModel:
                     self._notify_recovery(target_layer, False)
                     return False
 
-        # ── fast-forward to target_layer (PRD §4.7 step 2-3) ──
+        # ── fast-forward to target_layer (PRD §4.7 step 2) ──
         while not self.detect_layer(adb, scale_w, target_layer):
             cur = self.detect(adb, scale_w)
             if cur is None or self._layer_index(cur) < 0:
-                logger.error(
-                    "back_recover: lost after cold-start (cur=%s)", cur,
-                )
-                self._notify_recovery(target_layer, False)
-                return False
+                # 冷启动后可能截到短暂动画/加载帧（detect() 返回 None）。
+                # 重试 2 次（每 0.5s），过渡帧通常在 1s 内稳定。
+                for _i in range(2):
+                    time.sleep(0.5)
+                    cur = self.detect(adb, scale_w)
+                    if cur is not None and self._layer_index(cur) >= 0:
+                        break
+                else:
+                    logger.error(
+                        "back_recover: lost after cold-start (cur=%s)", cur,
+                    )
+                    self._notify_recovery(target_layer, False)
+                    return False
             self._call_on_layer(cur, adb, scale_w, quick=True)
-        self._call_on_layer(target_layer, adb, scale_w, quick=False)
 
         if target_page is not None:
             page_ok = self._recover_to_page(
