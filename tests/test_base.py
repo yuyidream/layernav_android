@@ -123,7 +123,9 @@ class TestBackOne:
     def test_back_one_sends_keyevent_and_returns_new_layer(self):
         m = _TestModel()
         adb = MockAdb()
-        m._detect_returns = ["L2", "L1"]
+        m._detect_returns = ["L2"]
+        # Mock poll → True: single KEYCODE_BACK suffices
+        m.poll_until_target_layer = lambda adb, target, scale_w, max_wait_s=8.0: True
         result = m.back_one(adb, 1.0)
         assert adb._events == [KEYCODE_BACK]
         assert result == "L1"
@@ -133,7 +135,8 @@ class TestBackOne:
         lst = _RecordListener()
         m.add_listener(lst)
         adb = MockAdb()
-        m._detect_returns = ["L2", "L1"]
+        m._detect_returns = ["L2"]
+        m.poll_until_target_layer = lambda adb, target, scale_w, max_wait_s=8.0: True
         m.back_one(adb, 1.0)
         assert len(lst.transitions) == 1
         assert lst.transitions[0] == ("L2", "L1", "back_one")
@@ -141,8 +144,13 @@ class TestBackOne:
     def test_back_one_retries_when_layer_unchanged(self):
         m = _TestModel()
         adb = MockAdb()
-        # 前 2 次 BACK 后仍在 L2 → 重试, 第 3 次回到 L1
-        m._detect_returns = ["L2", "L2", "L2", "L1"]
+        m._detect_returns = ["L2"]
+        # Fail twice, succeed on 3rd attempt → 3 KEYCODE_BACK
+        call_count = [0]
+        def _flaky_poll(adb, target, scale_w, max_wait_s=8.0):
+            call_count[0] += 1
+            return call_count[0] >= 3
+        m.poll_until_target_layer = _flaky_poll
         result = m.back_one(adb, 1.0)
         assert result == "L1"
         assert adb._events == [KEYCODE_BACK, KEYCODE_BACK, KEYCODE_BACK]
@@ -155,15 +163,14 @@ class TestBackOne:
             pass
 
         m._cold_start = _cold_start
+        # Mock poll → False: all attempts fail → back_recover
+        m.poll_until_target_layer = lambda adb, target, scale_w, max_wait_s=8.0: False
         m._detect_returns = [
             "L2",        # detect() → cur
-            "L2",        # attempt 1 → next (same)
-            "L2",        # attempt 2 → next (same)
-            "L2",        # attempt 3 → next (same) → 走 back_recover
             # ── back_recover ──
-            "L1",        # home_one post-detect
-            "L1",        # advance → detect("L1")
-            "L1",        # advance → detect_layer("L1") call handler
+            "L0",        # home_one cur detect
+            "L0",        # home_one next detect
+            "L1",        # detect_layer("L1") → detect → True → loop exits
             "L1",        # back_recover final detect_layer("L1")
         ]
         result = m.back_one(adb, 1.0, max_retries=3)
