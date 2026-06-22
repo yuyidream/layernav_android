@@ -40,13 +40,13 @@
 `detect_detail()` 一次截图返回层级 + 子页面；`back_recover` 支持 `target_page` 参数，恢复后自动精确定位到指定子页面。
 
 ✅ **完整导航原子 API**
-内置 `detect / detect_layer / _do_tap / back_one / back_recover` 原子操作，一行代码完成跨层级跳转。
+内置 `detect / detect_layer / _do_tap / _tap_to_layer / back_one / back_recover` 原子操作，一行代码完成跨层级跳转（v0.5.5：`_tap_to_layer` 从业务层上提为框架 API，tap + poll 闭环）。
 
 ✅ **防检测点击（v0.5.3）**
 `_do_tap` 提供可覆盖的层间点击入口，子类注入防风控策略（如 `mumdad.click_xonly` 的 x 轴随机抖动），框架只提供默认 `adb.tap`，不预设防护行为。
 
-✅ **故障自动恢复（v0.5.0 强化）**
-`detect()` 无法判定层级时 → `back_one()` 重试 3 次 BACK 失败后走 `back_recover`（HOME → 冷启动 → 前进恢复）。返回键失效、页面卡死、意外退回桌面时同样自动恢复。
+✅ **故障自动恢复（v0.5.5 强化）**
+`detect()` 无法判定层级时 → `back_one()` 用 `poll_until_target_layer` 验证 BACK 到达上一层，重试 3 次失败后走 `back_recover`（HOME → 冷启动 → 前进恢复）。返回键失效、页面卡死、意外退回桌面时同样自动恢复。
 
 ✅ **Quick 快速模式**
 专为恢复场景设计，handlers 收到 `quick=True` 时可精简业务逻辑（如选第一个未读），提升导航速度。
@@ -100,7 +100,7 @@ layers = [
 | 页面动作 | 流程调度、等待、重试 | 实现 `_on_Lx` 点击/滑动等业务动作 |
 | 导航逻辑 | `back_one` + `back_recover` / 恢复 | 无 |
 | 子页面导航 | `detect_detail` / `_recover_to_page` | 无（框架提供 `target_page` 路由） |
-| 点击 | **不负责** — 框架不 `tap` | handler 内 `adb.tap()` |
+| 点击 | 框架提供 `_tap_to_layer`（tap + poll 闭环） | handler 可选直接 `adb.tap()` |
 
 ### 3. 核心流程
 
@@ -236,7 +236,8 @@ model.back_one(adb, scale_w=1.0)
 | `detect(adb, scale_w) → str \| None` | 检测当前所在层级（Task 覆盖实现）。无法判定时返回 `None`，框架自动走恢复 |
 | `detect_layer(adb, scale_w, layer) → bool` | 目标感知检测：当前屏幕是否匹配指定层级（v0.5.0，Task 覆盖实现） |
 | `detect_detail(adb, scale_w) → DetectResult` | 检测层级 + 子页面名称（v0.3.0，默认调用 `detect` + `LayerDef.page_name`） |
-| `back_one(adb, scale_w, *, max_retries=3) → str` | 退回到上一层：KEYCODE_BACK 重试 3 次，失败走 `back_recover` 冷启动兜底 |
+| `back_one(adb, scale_w, *, max_retries=3) → str` | 退回到上一层：KEYCODE_BACK + poll_until_target_layer 验证，失败走 `back_recover` 冷启动兜底（v0.5.5） |
+| `_tap_to_layer(adb, scale_w, x, y, target, *, jitter_x, jitter_y, max_attempts=3) → bool` | **v0.5.5 新增**：tap + poll 闭环，点击后轮询直到到达目标层。调用方只需提供坐标 + 目标层，内部处理重试 |
 | `_do_tap(adb, x, y, *, jitter_x, jitter_y) → None` | 层间点击（默认 ``adb.tap``），子类覆盖加入防检测策略 |
 | `back_recover(adb, target, scale_w, *, target_page=None) → bool` | 故障恢复：HOME → 冷启动 → 快速前进 → 子页面（v0.4.3: 冷启动 3 次重试 + `adb reboot` 兜底） |
 

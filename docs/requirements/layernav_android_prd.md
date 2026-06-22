@@ -14,12 +14,12 @@
 ├─ back_one / home_one            ← 后退 / HOME
 ├─ back_recover                   ← 冷启动恢复
 ├─ poll_until_target_layer        ← 到达轮询
+├─ _tap_to_layer(x, y, target)    ← tap + poll 闭环（v0.5.5 上提）
 ├─ _do_tap(x, y, jitter_x, jitter_y) ← 层间点击（默认 adb.tap）
 └─ _call_on_layer(layer)          ← handler 路由
 
 collector 业务层
 ├─ _do_tap → adb.click_xonly      ← mumdad 风控
-├─ _tap_to_layer                  ← 重试闭环（tap + poll）
 ├─ _tap_row                        ← 坐标计算（badge 感知）
 ├─ _on_L1 → _tap_row + _tap_to_layer(→ L2)
 └─ _on_L2 → card.click + _tap_to_layer(→ L3)
@@ -165,16 +165,21 @@ def _recover_to_page(self, layer, page_name, adb, scale_w) -> bool:
 
 ### §4.1 `back_one(adb, scale_w, *, max_retries=3) → str`
 
-**退回到上一层**（KEYCODE_BACK，重试 + 冷启动兜底）。
+**退回到上一层**（KEYCODE_BACK，`poll_until_target_layer` + 冷启动兜底）。
+
+.. versionchanged:: 0.5.5
+    重构为 ``poll_until_target_layer`` 闭环：计算上一层 key → KEYCODE_BACK → poll 到达。
+    不再使用 fixed-sleep(1s)+单次 detect。
 
 ```
 back_one(*, max_retries):
-    cur = detect()                         ← ★ guard (pre-check)
+    cur = detect()                         ← guard (pre-check)
+    计算 target = 上一层 key（L3→L2, L2→L1, L1→L0,...）
     for attempt in range(max_retries):
-        KEYCODE_BACK → sleep(1.0)
-        next = detect()                    ← ★ validator (post-check)
-        if cur != next: return next        ← 成功退了一层
-    target = one_layer_up(cur)             ← cur - 1（L3→L2, L2→L1, L1→L0）
+        KEYCODE_BACK
+        if poll_until_target_layer(target) ← validator (poll to target)
+            notify_transition(cur, target) ← 触发 listener
+            return target
     return back_recover(target)            ← 兜底：冷启动恢复
 ```
 
@@ -281,6 +286,38 @@ def _do_tap(self, adb, click_x, click_y, jitter_x=0, jitter_y=0):
 
 ---
 
+### §4.6 `_tap_to_layer(adb, scale_w, click_x, click_y, target_layer, *, jitter_x=0, jitter_y=0, max_attempts=3, max_wait_s=8.0) → bool`（v0.5.5）
+
+**tap + poll 闭环**。.. versionadded:: 0.5.5 从 collector 业务层上提到框架层。
+
+点击后轮询直到到达目标层，失败重试最多 ``max_attempts`` 次（重试间隔 1s）。
+
+```
+_tap_to_layer(x, y, target, *, jitter_x, jitter_y):
+    for attempt in range(max_attempts):
+        _do_tap(x, y, jitter_x=jitter_x, jitter_y=jitter_y)   ← 子类覆盖防检测
+        if poll_until_target_layer(target, max_wait_s=max_wait_s):
+            return True
+        sleep(1.0)   ← 重试前等待
+    return False
+```
+
+| 参数 | 说明 |
+|------|------|
+| `click_x`, `click_y` | 点击坐标 |
+| `target_layer` | 目标层级 key（如 ``"L2"`` / ``"L3"``） |
+| `jitter_x`, `jitter_y` | 抖动范围，透传给 `_do_tap` |
+| `max_attempts` | 最大重试次数（默认 3） |
+| `max_wait_s` | 单次 poll 超时（默认 8s） |
+
+**设计意图**：对调用方屏蔽 tap + poll + retry 细节，只需提供坐标和目标层即可。子类覆盖 `_do_tap` 后自动继承防检测能力，不会出现"tap 完忘 poll" 的 bug。
+
+.. note::
+    框架同时提供 `_tap_to_layer`（tap + poll）和 `back_one`（KEYCODE_BACK + poll），
+    前进和后退路径统一使用 ``poll_until_target_layer`` 验证到达目标层。
+
+---
+
 ## §5. 完整示例
 
 ```
@@ -316,13 +353,13 @@ L3 → back_one() 失灵 → L0
 | `_on_Lx()` | 按层索引调用 | 覆盖：业务 + 点击 |
 | `init()` | 调用钩子 | 可选覆盖 |
 | `_recover_to_page()` | 调用钩子 | 可选覆盖 |
-| `back_one()` | KEYCODE_BACK 重试 + back_recover 兜底 | — |
+| `back_one()` | KEYCODE_BACK + poll_until_target_layer + back_recover 兜底（v0.5.5） | — |
 | `home_one()` | KEYCODE_HOME + detect | — |
 | `poll_until_target_layer()` | 自适应轮询检测目标层 | — |
 | `back_recover()` | 冷启动 + 快速前进 + 子页面恢复 | — |
 | `home_one(adb)` | 模块级函数 — KEYCODE_HOME + sleep | — |
 | `_do_tap(x,y,jitter_x,jitter_y)` | 层间点击（默认 ``adb.tap``） | 可选覆盖：防检测策略 |
-| `_tap_to_layer(x,y,target)` | — | 业务层：tap + poll 重试闭环 |
+| `_tap_to_layer(x,y,target)` | tap + poll 重试闭环（v0.5.5 上提） | — |
 
 ### §6.1 有限状态与无限状态的分离（借鉴 Automat）
 
@@ -342,7 +379,7 @@ L3 → back_one() 失灵 → L0
 | **guard**（守卫） | handler 自身的上下文校验 | 条件检查：当前层是否允许前进？（handler 返回 `None` 即拒绝） |
 | **validator**（验证器） | `_tap_to_layer` 内部的 `poll_until_target_layer()` | 后置校验：页面是否真的跳到了目标层？ |
 | **guard** | `back_one` 步骤 1 的 `detect()` | 条件检查：当前层是否允许后退？ |
-| **validator** | `back_one` 步骤 3 的 `detect()` | 后置校验：BACK 后实际在哪个层？ |
+| **validator** | `back_one` 内部的 `poll_until_target_layer()` | 后置校验：BACK 后是否真的到达了上一层？ |
 
 guard 失败 → 拒绝操作（静默或日志告警）；validator 失败 → 触发恢复链（`back_recover`）。
 

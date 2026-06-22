@@ -10,6 +10,7 @@ Framework provides:
     Atomic:   ``detect``  ``detect_layer``  ``back_one``  ``home_one``  ``back_recover``
              ``poll_until_target_layer``  (adaptive-poll after caller tap)
     Tap:      ``_do_tap`` — 层间点击，子类覆盖加入防检测策略
+             ``_tap_to_layer`` — tap + poll 闭环，点击后轮询直到到达目标层
 """
 
 from __future__ import annotations
@@ -181,6 +182,27 @@ class BaseLayerModel:
         """
         adb.tap(click_x, click_y)
 
+    def _tap_to_layer(
+        self, adb: AdbProtocol, scale_w: float,
+        click_x: int, click_y: int, target_layer: str,
+        jitter_x: int = 0, jitter_y: int = 0,
+        max_attempts: int = 3,
+        max_wait_s: float = 8.0,
+    ) -> bool:
+        """Tap + poll 闭环：点击后轮询直到到达目标层。
+
+        Uses :meth:`_do_tap`（子类可覆盖防检测）和
+        :meth:`poll_until_target_layer` 验证到达。失败时最多重试
+        ``max_attempts`` 次，重试间隔 1s。
+        """
+        for attempt in range(max_attempts):
+            self._do_tap(adb, click_x, click_y, jitter_x=jitter_x, jitter_y=jitter_y)
+            if self.poll_until_target_layer(adb, target_layer, scale_w, max_wait_s=max_wait_s):
+                return True
+            if attempt < max_attempts - 1:
+                time.sleep(1.0)
+        return False
+
     # ── Subclass overrides ────────────────────────────────────────────────────
 
     def detect(self, adb: AdbProtocol, scale_w: float) -> str | None:
@@ -317,33 +339,33 @@ class BaseLayerModel:
         return False
 
     def back_one(self, adb: AdbProtocol, scale_w: float, *, max_retries: int = 3) -> str:
-        """退回到上一层（KEYCODE_BACK，重试 + 冷启动兜底）。
+        """退回到上一层（KEYCODE_BACK，poll_until_target_layer + 冷启动兜底）。
 
-        1. detect() → 记录当前层 *cur*
-        2. KEYCODE_BACK → sleep 1s → detect()
-        3. cur != next → 返回 next（成功退了一层）
-        4. 否则重试，最多 *max_retries* 次
-        5. 全部失败 → :meth:`back_recover` 恢复到上一层（cur - 1）
+        1. detect() → 计算上一层 key
+        2. KEYCODE_BACK → poll_until_target_layer(上一层)
+        3. 失败重试，最多 *max_retries* 次
+        4. 全部失败 → :meth:`back_recover` 冷启动兜底
         """
         cur = self.detect(adb, scale_w)
         logger.debug("back_one: from %s", cur)
 
-        for attempt in range(max_retries):
-            adb.key_event(KEYCODE_BACK)
-            time.sleep(1.0)
-            next_cur = self.detect(adb, scale_w)
-            logger.debug("back_one: attempt %d/%d  %s → %s", attempt + 1, max_retries, cur, next_cur)
-            if cur != next_cur:
-                if cur is not None and next_cur is not None:
-                    self._notify_transition(cur, next_cur, "back_one")
-                return next_cur
-
-        # 全部重试失败 → 冷启动兜底
         ci = self._layer_index(cur) if cur is not None else -1
         if ci > 0:
             target = self.layers[ci - 1].key
         else:
             target = "L1"
+
+        for attempt in range(max_retries):
+            adb.key_event(KEYCODE_BACK)
+            if self.poll_until_target_layer(adb, target, scale_w):
+                if cur is not None and target is not None:
+                    self._notify_transition(cur, target, "back_one")
+                return target
+            logger.debug(
+                "back_one: attempt %d/%d poll %s timeout",
+                attempt + 1, max_retries, target,
+            )
+
         logger.warning(
             "back_one: %d attempts failed (stuck at %s) — falling back to back_recover(%s)",
             max_retries, cur, target,
