@@ -242,6 +242,7 @@ class TestListener:
         m.add_listener(lst2)
         adb = MockAdb()
         m._detect_returns = ["L2", "L1"]
+        m.poll_until_target_layer = lambda adb, target, scale_w, max_wait_s=8.0: True
         m.back_one(adb, 1.0)
         assert len(lst1.transitions) == 1
         assert len(lst2.transitions) == 1
@@ -252,21 +253,20 @@ class TestListener:
         m.add_listener(lst)
         adb = MockAdb()
 
-        # back_one(): 3 retries stuck at L2 → fallback to back_recover("L1")
-        # back_recover fast-forward: detect None → notify_recovery(False)
+        # Mock poll → False: all 3 retries fail → back_recover
+        m.poll_until_target_layer = lambda adb, target, scale_w, max_wait_s=8.0: False
+
+        # back_one → back_recover fast-forward: detect None → notify_recovery(False)
         m._detect_returns = [
-            "L2",       # back_one → detect() (cur)
-            "L2",       # attempt 1 → next (same → retry)
-            "L2",       # attempt 2 → next (same → retry)
-            "L2",       # attempt 3 → next (same → fallback)
-            # back_recover → home_one
-            "L0",       # home_one cur detect (before KEYCODE_HOME)
-            "L0",       # home_one next detect (after KEYCODE_HOME)
-            # fast-forward loop
-            "L0",       # detect_layer("L1") → detect → L0 → not L1 → enter loop
-            None,       # detect() in loop → None → retry 1
-            None,       # detect() retry 1 → None
-            None,       # detect() retry 2 → None → for-else fail
+            "L2",  # back_one → detect() (cur)
+            "L2",  # back_recover → home_one cur detect
+            "L2",  # home_one next detect
+            "L0",  # fast-forward detect_layer check → L0 ≠ L1 → enter
+            "L0",  # cur=detect() → L0 → _call_on_layer("L0") → returns "L1"
+            None,  # while: detect_layer check → None ≠ L1 → enter
+            None,  # cur=detect() → None → enter retry block
+            None,  # retry _i=0 → detect() → None
+            None,  # retry _i=1 → detect() → None → for-else fail → return False
         ]
         ok = m.back_one(adb, 1.0)
         assert ok == "L1"
