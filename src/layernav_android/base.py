@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from layernav_android._protocol import AdbProtocol
 from layernav_android.logging import get_logger
@@ -147,10 +147,22 @@ class BaseLayerModel:
 
     def __init__(self) -> None:
         self._listeners: list[LayerListener] = []
+        self._idle_watch: Any | None = None
 
     def add_listener(self, listener: LayerListener) -> None:
         """Register a :class:`LayerListener` to observe lifecycle events."""
         self._listeners.append(listener)
+
+    def bind_idle_watch(self, watch: Any | None) -> None:
+        """Inject an idle watchdog instance (duck-typed: ``touch()`` / ``is_violated()``).
+
+        When bound, :meth:`back_recover` will:
+        - call ``touch()`` on entry to reset the idle baseline
+        - check ``is_violated()`` at each fast-forward iteration
+
+        Pass ``None`` to unbind.  Default is ``None`` (no idle protection).
+        """
+        self._idle_watch = watch
 
     def _notify_transition(
         self, from_layer: str, to_layer: str, method: str,
@@ -398,6 +410,7 @@ class BaseLayerModel:
         scale_w: float,
         *,
         target_page: str | None = None,
+        max_nav_steps: int = 3,
     ) -> bool:
         """Recover after BACK exhaustion: cold-start → fast-forward → page.
 
@@ -405,9 +418,19 @@ class BaseLayerModel:
         attempt is made with ``allow_reboot=True`` (``adb reboot`` +
         wait‑for‑boot + cold‑start).  If *target_page* is given, calls
         :meth:`_recover_to_page` after reaching *target_layer*.
+
+        *max_nav_steps* bounds the fast-forward loop (layer-navigation
+        steps).  Default 3 is sufficient for the 4-layer WeChat model
+        (L0→L1→L2→L3→L0).  Consumers with more layers should pass a
+        higher value explicitly.
         """
         logger.warning("back_recover: cold-start → fast-forward → %s (page=%s)",
                      target_layer, target_page)
+
+        # Touch idle watchdog on entry (covers cold-start + reboot wait)
+        if self._idle_watch is not None:
+            self._idle_watch.touch()
+
         self.home_one(adb, scale_w)
 
         # ── cold-start with retries (3× normal, 1× reboot) ──
@@ -451,7 +474,26 @@ class BaseLayerModel:
                     return False
 
         # ── fast-forward to target_layer (PRD §4.7 step 2) ──
+        nav_steps = 0
         while not self.detect_layer(adb, scale_w, target_layer):
+            # Idle watchdog: abort if violated (e.g. device stuck)
+            if self._idle_watch is not None and self._idle_watch.is_violated():
+                logger.error(
+                    "back_recover: idle watchdog violated at nav_step=%d",
+                    nav_steps,
+                )
+                self._notify_recovery(target_layer, False)
+                return False
+
+            nav_steps += 1
+            if nav_steps > max_nav_steps:
+                logger.error(
+                    "back_recover: exceeded max_nav_steps=%d "
+                    "(fast-forward bounded abort)", max_nav_steps,
+                )
+                self._notify_recovery(target_layer, False)
+                return False
+
             cur = self.detect(adb, scale_w)
             if cur is None or self._layer_index(cur) < 0:
                 # 冷启动后可能截到短暂动画/加载帧（detect() 返回 None）。
@@ -467,7 +509,16 @@ class BaseLayerModel:
                     )
                     self._notify_recovery(target_layer, False)
                     return False
-            self._call_on_layer(cur, adb, scale_w, quick=True)
+
+            try:
+                self._call_on_layer(cur, adb, scale_w, quick=True)
+            except Exception:
+                logger.error(
+                    "back_recover: _call_on_layer(%s) raised exception",
+                    cur, exc_info=True,
+                )
+                self._notify_recovery(target_layer, False)
+                return False
 
         if target_page is not None:
             page_ok = self._recover_to_page(

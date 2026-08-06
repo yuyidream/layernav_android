@@ -232,6 +232,80 @@ class TestBackRecover:
         assert ok is False
         assert lst.recoveries == [("L1", False)]
 
+    def test_bind_idle_watch_touch_on_entry(self):
+        """back_recover 入口 touch idle watchdog（覆盖冷启动 + 重启等待）。"""
+        m = _TestModel()
+        adb = MockAdb()
+        watch = MagicMock()
+        watch.touch.return_value = None
+        watch.is_violated.return_value = False
+        m.bind_idle_watch(watch)
+
+        def _cold_start(adb, target, scale):
+            m._detect_returns = ["L1", "L1"]
+
+        m._cold_start = _cold_start
+        m._detect_returns = ["L1", "L1"]
+
+        ok = m.back_recover(adb, "L1", 1.0)
+        assert ok is True
+        watch.touch.assert_called_once()
+
+    def test_idle_watch_violation_aborts_fast_forward(self):
+        """fast-forward 期间 idle watchdog 违规 → 中止并通知 recovery 失败。"""
+        m = _TestModel()
+        adb = MockAdb()
+        lst = _RecordListener()
+        m.add_listener(lst)
+        watch = MagicMock()
+        watch.touch.return_value = None
+        watch.is_violated.return_value = True  # 首次循环即违规
+        m.bind_idle_watch(watch)
+
+        # cold_start 后 detect 恒为 L0 → detect_layer("L1") 为 False → 进入 fast-forward
+        def _cold_start(adb, target, scale):
+            m._detect_returns = ["L0"]
+
+        m._cold_start = _cold_start
+        m._detect_returns = ["L0"]
+
+        ok = m.back_recover(adb, "L1", 1.0)
+        assert ok is False
+        assert lst.recoveries == [("L1", False)]
+
+    def test_max_nav_steps_bounds_fast_forward(self):
+        """max_nav_steps 限制 fast-forward 步数，超限中止。"""
+        m = _TestModel()
+        adb = MockAdb()
+        lst = _RecordListener()
+        m.add_listener(lst)
+
+        # detect 恒为 L0 → detect_layer("L1") 恒 False，fast-forward 永不收敛
+        # 依赖 max_nav_steps 兜底中止
+        def _cold_start():
+            m._detect_returns = []
+
+        m._cold_start = _cold_start
+        m._detect_returns = []
+
+        ok = m.back_recover(adb, "L1", 1.0, max_nav_steps=2)
+        assert ok is False
+        assert lst.recoveries == [("L1", False)]
+
+    def test_unbind_idle_watch_default_none(self):
+        """默认不绑定 idle watchdog，back_recover 不 touch。"""
+        m = _TestModel()
+        adb = MockAdb()
+        assert m._idle_watch is None
+
+        def _cold_start(adb, target, scale):
+            m._detect_returns = ["L1", "L1"]
+
+        m._cold_start = _cold_start
+        m._detect_returns = ["L1", "L1"]
+        ok = m.back_recover(adb, "L1", 1.0)
+        assert ok is True
+
 
 class TestListener:
     def test_add_listener_and_notify(self):
