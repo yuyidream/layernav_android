@@ -1,3 +1,5 @@
+
+
 # LayerNav_Android
 
 > A stable page layer navigation framework for Android ADB automation.
@@ -237,6 +239,7 @@ model.back_one(adb, scale_w=1.0)
 | `detect_layer(adb, scale_w, layer) → bool` | 目标感知检测：当前屏幕是否匹配指定层级（v0.5.0，Task 覆盖实现） |
 | `detect_detail(adb, scale_w) → DetectResult` | 检测层级 + 子页面名称（v0.3.0，默认调用 `detect` + `LayerDef.page_name`） |
 | `back_one(adb, scale_w, *, max_retries=3) → str` | 退回到上一层：KEYCODE_BACK + poll_until_target_layer 验证，失败走 `back_recover` 冷启动兜底（v0.5.5） |
+| `home_one(adb, scale_w) → str \| None` | 执行 HOME 键返回桌面并返回当前层级（OOP 版本） |
 | `_tap_to_layer(adb, scale_w, x, y, target, *, jitter_x, jitter_y, max_attempts=3) → bool` | **v0.5.5 新增**：tap + poll 闭环，点击后轮询直到到达目标层。调用方只需提供坐标 + 目标层，内部处理重试 |
 | `_do_tap(adb, x, y, *, jitter_x, jitter_y) → None` | 层间点击（默认 ``adb.tap``），子类覆盖加入防检测策略 |
 | `back_recover(adb, target, scale_w, *, target_page=None) → bool` | 故障恢复：HOME → 冷启动 → 快速前进 → 子页面（v0.4.3: 冷启动 3 次重试 + `adb reboot` 兜底） |
